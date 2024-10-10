@@ -3,11 +3,11 @@ use clap::Parser;
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
-    /// Input PDF file
+    /// Input file
     #[arg(short, long)]
     pub input: String,
 
-    /// Output PDF file
+    /// Output file
     #[arg(short, long)]
     pub output: String,
 

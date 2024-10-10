@@ -15,7 +15,7 @@ pub fn read_epub(path: &str) -> Result<EpubDoc<BufReader<File>>> {
     Ok(doc)
 }
 
-pub fn write_epub(mut doc: EpubDoc<BufReader<File>>, to: String) -> Result<()> {
+pub fn write_epub(mut doc: EpubDoc<BufReader<File>>, to: &str) -> Result<()> {
     tracing::info!("Writing epub...");
     let mut builder = EpubBuilder::new(ZipLibrary::new()?)?;
 
