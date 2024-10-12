@@ -3,7 +3,7 @@ mod epub;
 mod pdf;
 
 use cli::Args;
-use epub::{read_epub, write_epub};
+use epub::{edit_epub, read_epub, write_epub};
 use pdf::{edit_pdf, read_pdf, write_pdf};
 
 use std::{
@@ -41,12 +41,13 @@ fn main() -> Result<()> {
     match file_type {
         FileType::PDF => {
             let doc = read_pdf(&args.input)?;
-            let edited_doc = edit_pdf(doc, |text| text.replace("dollar", "million dollars"))?;
-            write_pdf(edited_doc, &args.output)?;
+            let edited = edit_pdf(doc, |text| text.replace("dollar", "million dollars"))?;
+            write_pdf(edited, &args.output)?;
         }
         FileType::EPUB => {
             let doc = read_epub(&args.input)?;
-            write_epub(doc, &args.output)?;
+            let edited = edit_epub(doc, |text| text.to_string())?;
+            write_epub(edited, &args.output)?;
         }
         FileType::Unsupported => tracing::info!("File type not currently supported"),
     }
