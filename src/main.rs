@@ -46,7 +46,7 @@ fn main() -> Result<()> {
         }
         FileType::EPUB => {
             let doc = read_epub(&args.input)?;
-            let edited = edit_epub(doc, |text| text.to_string())?;
+            let edited = edit_epub(doc, |text| text.replace("nervous", "skittish"))?;
             write_epub(edited, &args.output)?;
         }
         FileType::Unsupported => tracing::info!("File type not currently supported"),

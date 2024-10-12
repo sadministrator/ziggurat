@@ -40,6 +40,69 @@ pub fn write_epub(mut edited: EditedEpub, to: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn edit_epub(
+    mut doc: EpubDoc<BufReader<File>>,
+    edit_func: impl Fn(&str) -> String,
+) -> Result<EditedEpub> {
+    let mut edited_content = HashMap::new();
+
+    for _ in 0..doc.get_num_pages() {
+        if let Some((content, mime)) = doc.get_current_str() {
+            if mime == "application/xhtml+xml" {
+                let text = from_read(content.as_bytes(), 80);
+                let cleaned_text = clean_text(&text);
+                let edited_text = edit_func(&cleaned_text);
+                let edited_html = text_to_html(&edited_text, &content);
+                let current_id = doc
+                    .get_current_id()
+                    .ok_or(eyre!("Unable to get current id"))?;
+
+                tracing::debug!("Original content: {}", content);
+                tracing::debug!("Cleaned text: {}", cleaned_text);
+                tracing::debug!("Edited text: {}", edited_text);
+                tracing::debug!("Edited HTML: {}", edited_html);
+
+                edited_content.insert(current_id, edited_html);
+            }
+        }
+
+        doc.go_next();
+    }
+    doc.set_current_page(0);
+
+    Ok(EditedEpub {
+        doc,
+        content: edited_content,
+    })
+}
+
+fn clean_text(text: &str) -> String {
+    let page_number_re = Regex::new(r"\n\d+\n").unwrap();
+    let cleaned = page_number_re.replace_all(text, "\n").to_string();
+    cleaned.replace("\n\n", "\n").trim().to_string()
+}
+
+fn text_to_html(text: &str, original_html: &str) -> String {
+    let mut updated_html = original_html.to_string();
+    let text_parts: Vec<&str> = text.split('\n').collect();
+    let mut text_index = 0;
+
+    let re = Regex::new(r">([^<]+)<").unwrap();
+    updated_html = re
+        .replace_all(&updated_html, |caps: &regex::Captures| {
+            if text_index < text_parts.len() {
+                let replacement = format!(">{}<", text_parts[text_index]);
+                text_index += 1;
+                replacement
+            } else {
+                caps[0].to_string()
+            }
+        })
+        .into_owned();
+
+    updated_html
+}
+
 fn add_metadata(builder: &mut EpubBuilder<ZipLibrary>, edited: &EditedEpub) -> Result<()> {
     let epub_builder_fields = ["title", "contributor", "description", "subject"];
 
@@ -105,54 +168,4 @@ fn add_content_with_chapters(
     }
 
     Ok(())
-}
-
-pub fn edit_epub(
-    mut doc: EpubDoc<BufReader<File>>,
-    edit_func: impl Fn(&str) -> String,
-) -> Result<EditedEpub> {
-    let mut edited_content = HashMap::new();
-
-    for _ in 0..doc.get_num_pages() {
-        if let Some((content, mime)) = doc.get_current_str() {
-            if mime == "application/xhtml+xml" {
-                let text = from_read(content.as_bytes(), 80);
-                let cleaned_text = clean_text(&text);
-                let edited_text = edit_func(&cleaned_text);
-                let edited_html = text_to_html(&edited_text, &content);
-                let current_id = doc
-                    .get_current_id()
-                    .ok_or(eyre!("Unable to get current id"))?;
-
-                edited_content.insert(current_id, edited_html);
-            }
-        }
-
-        doc.go_next();
-    }
-    doc.set_current_page(0);
-
-    Ok(EditedEpub {
-        doc,
-        content: edited_content,
-    })
-}
-
-fn clean_text(text: &str) -> String {
-    let page_number_re = Regex::new(r"\n\d+\n").unwrap();
-    let cleaned = page_number_re.replace_all(text, "\n").to_string();
-    cleaned.replace("\n\n", "\n").trim().to_string()
-}
-
-fn text_to_html(text: &str, original_html: &str) -> String {
-    // This is a simplified version. You might need to adjust it based on your specific needs.
-    let body_content = text
-        .split("\n")
-        .map(|line| format!("<p>{}</p>", line))
-        .collect::<Vec<_>>()
-        .join("\n");
-    original_html.replace(
-        r#"<body>.*</body>"#,
-        &format!("<body>{}</body>", body_content),
-    )
 }
