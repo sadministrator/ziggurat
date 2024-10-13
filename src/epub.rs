@@ -8,8 +8,7 @@ use std::{
 use epub::doc::EpubDoc;
 use epub_builder::{EpubBuilder, EpubContent, ReferenceType, ZipLibrary};
 use eyre::{eyre, Result};
-use html2text::from_read;
-use regex::Regex;
+use tl::{Bytes, Node, ParserOptions};
 
 pub struct EditedEpub {
     pub doc: EpubDoc<BufReader<File>>,
@@ -21,6 +20,61 @@ pub fn read_epub(path: &str) -> Result<EpubDoc<BufReader<File>>> {
     let doc = EpubDoc::new(Path::new(path))?;
 
     Ok(doc)
+}
+
+pub fn edit_epub(
+    mut doc: EpubDoc<BufReader<File>>,
+    edit_func: impl Fn(&str) -> String,
+) -> Result<EditedEpub> {
+    let mut edited_content = HashMap::new();
+
+    for _ in 0..doc.get_num_pages() {
+        if let Some((content, mime)) = doc.get_current_str() {
+            if mime == "application/xhtml+xml" {
+                let edited_html = edit_html(&content, &edit_func)?;
+                let current_id = doc
+                    .get_current_id()
+                    .ok_or(eyre!("Unable to get current id"))?;
+
+                edited_content.insert(current_id, edited_html);
+            }
+        }
+
+        doc.go_next();
+    }
+    doc.set_current_page(0);
+
+    Ok(EditedEpub {
+        doc,
+        content: edited_content,
+    })
+}
+
+fn edit_html(html: &str, edit_func: &impl Fn(&str) -> String) -> Result<String> {
+    let mut dom = tl::parse(html, ParserOptions::default())?;
+    let mut text_nodes = vec![];
+
+    for (index, node) in dom.nodes().iter().enumerate() {
+        if let Node::Raw(_) = node {
+            text_nodes.push(index);
+        }
+    }
+
+    let parser = dom.parser_mut();
+
+    for &index in &text_nodes {
+        if let Some(Node::Raw(bytes)) = &mut parser.resolve_node_id(index as u32) {
+            let text = bytes.as_utf8_str();
+            let edited_text = edit_func(&text);
+            let mut edited_bytes = Bytes::new();
+            edited_bytes.set(edited_text.as_bytes())?;
+            if let Some(node) = parser.resolve_node_id_mut(index as u32) {
+                *node = Node::Raw(edited_bytes);
+            }
+        }
+    }
+
+    Ok(dom.outer_html())
 }
 
 pub fn write_epub(mut edited: EditedEpub, to: &str) -> Result<()> {
@@ -38,69 +92,6 @@ pub fn write_epub(mut edited: EditedEpub, to: &str) -> Result<()> {
     buf_writer.flush()?;
 
     Ok(())
-}
-
-pub fn edit_epub(
-    mut doc: EpubDoc<BufReader<File>>,
-    edit_func: impl Fn(&str) -> String,
-) -> Result<EditedEpub> {
-    let mut edited_content = HashMap::new();
-
-    for _ in 0..doc.get_num_pages() {
-        if let Some((content, mime)) = doc.get_current_str() {
-            if mime == "application/xhtml+xml" {
-                let text = from_read(content.as_bytes(), 80);
-                let cleaned_text = clean_text(&text);
-                let edited_text = edit_func(&cleaned_text);
-                let edited_html = text_to_html(&edited_text, &content);
-                let current_id = doc
-                    .get_current_id()
-                    .ok_or(eyre!("Unable to get current id"))?;
-
-                tracing::debug!("Original content: {}", content);
-                tracing::debug!("Cleaned text: {}", cleaned_text);
-                tracing::debug!("Edited text: {}", edited_text);
-                tracing::debug!("Edited HTML: {}", edited_html);
-
-                edited_content.insert(current_id, edited_html);
-            }
-        }
-
-        doc.go_next();
-    }
-    doc.set_current_page(0);
-
-    Ok(EditedEpub {
-        doc,
-        content: edited_content,
-    })
-}
-
-fn clean_text(text: &str) -> String {
-    let page_number_re = Regex::new(r"\n\d+\n").unwrap();
-    let cleaned = page_number_re.replace_all(text, "\n").to_string();
-    cleaned.replace("\n\n", "\n").trim().to_string()
-}
-
-fn text_to_html(text: &str, original_html: &str) -> String {
-    let mut updated_html = original_html.to_string();
-    let text_parts: Vec<&str> = text.split('\n').collect();
-    let mut text_index = 0;
-
-    let re = Regex::new(r">([^<]+)<").unwrap();
-    updated_html = re
-        .replace_all(&updated_html, |caps: &regex::Captures| {
-            if text_index < text_parts.len() {
-                let replacement = format!(">{}<", text_parts[text_index]);
-                text_index += 1;
-                replacement
-            } else {
-                caps[0].to_string()
-            }
-        })
-        .into_owned();
-
-    updated_html
 }
 
 fn add_metadata(builder: &mut EpubBuilder<ZipLibrary>, edited: &EditedEpub) -> Result<()> {
