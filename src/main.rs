@@ -1,12 +1,16 @@
 mod cli;
 mod epub;
+mod google;
 mod pdf;
 
 use cli::Args;
+use dotenv::dotenv;
 use epub::{edit_epub, read_epub, write_epub};
+use google::translate_text;
 use pdf::{edit_pdf, read_pdf, write_pdf};
 
 use std::{
+    env,
     fs::File,
     io::{Read, Seek, SeekFrom},
 };
@@ -23,12 +27,15 @@ enum FileType {
     Unsupported,
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::TRACE)
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
+    dotenv().ok();
 
+    let api_key = env::var("GOOGLE_APPLICATION_CREDENTIALS")?;
     let args = Args::parse();
     let file_type = get_file_type(&args.input)?;
     tracing::info!(
@@ -41,12 +48,18 @@ fn main() -> Result<()> {
     match file_type {
         FileType::PDF => {
             let doc = read_pdf(&args.input)?;
-            let edited = edit_pdf(doc, |text| text.replace("dollar", "million dollars"))?;
+            let edited = edit_pdf(doc, |text| {
+                translate_text(text.to_string(), args.to.clone(), api_key.clone())
+            })
+            .await?;
             write_pdf(edited, &args.output)?;
         }
         FileType::EPUB => {
             let doc = read_epub(&args.input)?;
-            let edited = edit_epub(doc, |text| text.replace("nervous", "skittish"))?;
+            let edited = edit_epub(doc, |text| {
+                translate_text(text.to_string(), args.to.clone(), api_key.clone())
+            })
+            .await?;
             write_epub(edited, &args.output)?;
         }
         FileType::Unsupported => tracing::info!("File type not currently supported"),

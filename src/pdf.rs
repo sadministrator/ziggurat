@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use eyre::Result;
 use lopdf::{
     content::{Content, Operation},
@@ -18,7 +20,11 @@ pub fn write_pdf(mut doc: Document, to: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn edit_pdf(doc: Document, edit_func: impl Fn(&str) -> String) -> Result<Document> {
+pub async fn edit_pdf<F, Fut>(doc: Document, edit_func: F) -> Result<Document>
+where
+    F: Fn(&str) -> Fut,
+    Fut: Future<Output = Result<String>>,
+{
     let mut edited_doc = Document::with_version("1.5");
     let pages_id = edited_doc.new_object_id();
     let font_id = edited_doc.add_object(dictionary! {
@@ -35,7 +41,7 @@ pub fn edit_pdf(doc: Document, edit_func: impl Fn(&str) -> String) -> Result<Doc
     let mut page_ids: Vec<Object> = vec![];
     for (page_num, _) in doc.get_pages() {
         let page_text = doc.extract_text(&[page_num])?;
-        let edited_text = edit_func(&page_text);
+        let edited_text = edit_func(&page_text).await?;
         let content = Content {
             operations: format_text(&edited_text),
         };

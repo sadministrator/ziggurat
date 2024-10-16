@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fs::File,
+    future::Future,
     io::{BufReader, BufWriter, Cursor, Write},
     path::Path,
 };
@@ -22,16 +23,20 @@ pub fn read_epub(path: &str) -> Result<EpubDoc<BufReader<File>>> {
     Ok(doc)
 }
 
-pub fn edit_epub(
+pub async fn edit_epub<F, Fut>(
     mut doc: EpubDoc<BufReader<File>>,
-    edit_func: impl Fn(&str) -> String,
-) -> Result<EditedEpub> {
+    edit_func: F,
+) -> Result<EditedEpub>
+where
+    F: Fn(&str) -> Fut,
+    Fut: Future<Output = Result<String>>,
+{
     let mut edited_content = HashMap::new();
 
     for _ in 0..doc.get_num_pages() {
         if let Some((content, mime)) = doc.get_current_str() {
             if mime == "application/xhtml+xml" {
-                let edited_html = edit_html(&content, &edit_func)?;
+                let edited_html = edit_html(&content, &edit_func).await?;
                 let current_id = doc
                     .get_current_id()
                     .ok_or(eyre!("Unable to get current id"))?;
@@ -50,7 +55,11 @@ pub fn edit_epub(
     })
 }
 
-fn edit_html(html: &str, edit_func: &impl Fn(&str) -> String) -> Result<String> {
+async fn edit_html<F, Fut>(html: &str, edit_func: F) -> Result<String>
+where
+    F: Fn(&str) -> Fut,
+    Fut: Future<Output = Result<String>>,
+{
     let mut dom = tl::parse(html, ParserOptions::default())?;
     let mut text_nodes = vec![];
 
@@ -65,7 +74,7 @@ fn edit_html(html: &str, edit_func: &impl Fn(&str) -> String) -> Result<String> 
     for &index in &text_nodes {
         if let Some(Node::Raw(bytes)) = &mut parser.resolve_node_id(index as u32) {
             let text = bytes.as_utf8_str();
-            let edited_text = edit_func(&text);
+            let edited_text = edit_func(&text).await?;
             let mut edited_bytes = Bytes::new();
             edited_bytes.set(edited_text.as_bytes())?;
             if let Some(node) = parser.resolve_node_id_mut(index as u32) {
