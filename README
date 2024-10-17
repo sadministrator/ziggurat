@@ -1,0 +1,60 @@
+# PDF and EPUB Translator
+
+A command-line utility written in Rust that translates PDF and EPUB files into different languages using the Google Translate API.
+
+## Features
+
+- Supports translation of PDF and EPUB files
+- Uses Google Translate API for accurate translations
+- Simple command-line interface
+- Verbose mode for detailed operation logs
+
+## Prerequisites
+
+- Google Cloud account with Translation API enabled
+- Google Application API key
+
+## Installation
+
+1. Clone this repository:
+```
+git clone https://github.com/sadministrator/ziggurat
+cd ziggurat
+```
+
+2. Build the project:
+`cargo build --release`
+
+3. The executable will be available in `target/release/ziggurat`
+
+## Configuration
+
+1. Create a `.env` file in the project root directory
+2. Add your Google API key to the `.env` file:
+`GOOGLE_APPLICATION_CREDENTIALS=<YOUR_API_KEY>`
+
+## Usage
+`ziggurat [OPTIONS] --input <INPUT> --output <OUTPUT> --to <TO>`
+
+### Options:
+
+- `-i, --input <INPUT>`: Input file (PDF or EPUB)
+- `-o, --output <OUTPUT>`: Output file
+- `-t, --to <TO>`: Target language code (e.g., 'es' for Spanish, 'fr' for French)
+- `-v, --verbose`: Enable verbose mode
+- `-h, --help`: Print help
+- `-V, --version`: Print version
+
+### Example:
+`ziggurat --input book.pdf --output libro.pdf --to es`
+
+This command translates `book.pdf` to Spanish and saves the result as `libro.pdf`.
+
+## Supported Languages
+
+This utility supports all languages available in the Google Translate API. Use the appropriate language code when specifying the target language.
+
+## Notes
+
+- The translation quality depends on the Google Translate API.
+- Processing large files may take some time and consume API quota.

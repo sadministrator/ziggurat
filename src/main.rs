@@ -29,14 +29,18 @@ enum FileType {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let api_key = env::var("GOOGLE_APPLICATION_CREDENTIALS")?;
+    let args = Args::parse();
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::TRACE)
+        .with_max_level(if args.verbose {
+            Level::TRACE
+        } else {
+            Level::INFO
+        })
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
     dotenv().ok();
 
-    let api_key = env::var("GOOGLE_APPLICATION_CREDENTIALS")?;
-    let args = Args::parse();
     let file_type = get_file_type(&args.input)?;
     tracing::info!(
         "Converting {:?} file {} to {}...",
