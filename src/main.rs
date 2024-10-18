@@ -8,15 +8,16 @@ use dotenv::dotenv;
 use epub::{edit_epub, read_epub, write_epub};
 use google::translate_text;
 use pdf::{edit_pdf, read_pdf, write_pdf};
+use serde_json::Value;
 
 use std::{
     env,
-    fs::File,
+    fs::{self, File},
     io::{Read, Seek, SeekFrom},
 };
 
 use clap::Parser;
-use eyre::Result;
+use eyre::{eyre, Result};
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
@@ -29,8 +30,22 @@ enum FileType {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let api_key = env::var("GOOGLE_APPLICATION_CREDENTIALS")?;
     let args = Args::parse();
+    let api_key = if let Some(key) = args.api_key {
+        key
+    } else if let Some(path) = args.config {
+        let contents = fs::read_to_string(path)?;
+        let config: Value = serde_json::from_str(&contents)?;
+
+        config["api_key"]
+            .as_str()
+            .ok_or(eyre!("No API key value in config file"))?
+            .to_string()
+    } else {
+        dotenv().ok();
+        env::var("ZIGGURAT_API_KEY")?
+    };
+
     let subscriber = FmtSubscriber::builder()
         .with_max_level(if args.verbose {
             Level::TRACE
@@ -39,7 +54,6 @@ async fn main() -> Result<()> {
         })
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
-    dotenv().ok();
 
     let file_type = get_file_type(&args.input)?;
     tracing::info!(
