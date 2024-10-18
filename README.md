@@ -1,4 +1,5 @@
-# PDF and EPUB Translator
+![babel](https://github.com/user-attachments/assets/6a89d44e-41b3-4ece-a1b3-7ea84a305d7c)
+# Ziggurat: PDF and EPUB Translator
 A command-line utility written in Rust that translates PDF and EPUB files into different languages using the Google Translate API.
 
 ## Features
