@@ -2,12 +2,6 @@
 # Ziggurat: PDF and EPUB Translator
 A command-line utility written in Rust that translates PDF and EPUB files into different languages using the Google Translate API.
 
-## Features
-- Supports translation of PDF and EPUB files
-- Uses Google Translate API for accurate translations
-- Simple command-line interface
-- Verbose mode for detailed operation logs
-
 ## Prerequisites
 - Google Cloud account with Translation API enabled
 - Google API key
@@ -25,9 +19,9 @@ cd ziggurat
 ## Configuration
 You can provide a Google API key in one of several ways (listed in order of priority):
 1. Pass it in the CLI command with `--api-key <YOUR_API_KEY>`.
-2. Pass in the path to a JSON config file which contains the key with `--config /path/to/your/key`. Config file contents should look like `{"api_key": "YOUR_API_KEY" }`.
+2. Pass in the path to a JSON config file which contains the key with `--config /path/to/your/config`. Config file contents should look like `{"api_key": "YOUR_API_KEY" }`.
 3. Create a `.env` file in the project root directory and add `ZIGGURAT_API_KEY=<YOUR_API_KEY>`.
-4. Set it as an environment variable with `export ZIGGURAT_API_KEY`.
+4. Set it as an environment variable with `export ZIGGURAT_API_KEY=<YOUR_API_KEY>`.
 
 ## Usage
 `ziggurat [OPTIONS] --input <INPUT> --output <OUTPUT> --to <TO>`

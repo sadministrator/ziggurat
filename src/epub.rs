@@ -60,7 +60,9 @@ where
     F: Fn(&str) -> Fut,
     Fut: Future<Output = Result<String>>,
 {
-    let mut dom = tl::parse(html, ParserOptions::default())?;
+    let (html, special_tags) = replace_special_tags(html);
+
+    let mut dom = tl::parse(&html, ParserOptions::default())?;
     let mut text_nodes = vec![];
 
     for (index, node) in dom.nodes().iter().enumerate() {
@@ -83,7 +85,33 @@ where
         }
     }
 
-    Ok(dom.outer_html())
+    let mut edited_html = dom.outer_html();
+    edited_html = restore_special_tags(edited_html, special_tags);
+
+    Ok(edited_html)
+}
+
+fn replace_special_tags(html: &str) -> (String, Vec<(String, String)>) {
+    let mut special_tags = Vec::new();
+    let mut new_html = html.to_string();
+    let re = regex::Regex::new(r"<.*pagebreak.*>").unwrap();
+
+    for cap in re.captures_iter(html) {
+        tracing::error!("{}", &cap[0]);
+        let tag = cap[0].to_string();
+        let placeholder = format!("SPECIAL_TAG_{}", special_tags.len());
+        special_tags.push((placeholder.clone(), tag.clone()));
+        new_html = new_html.replace(&tag, &placeholder);
+    }
+
+    (new_html, special_tags)
+}
+
+fn restore_special_tags(mut html: String, special_tags: Vec<(String, String)>) -> String {
+    for (placeholder, tag) in special_tags {
+        html = html.replace(&placeholder, &tag);
+    }
+    html
 }
 
 pub fn write_epub(mut edited: EditedEpub, to: &str) -> Result<()> {

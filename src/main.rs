@@ -4,11 +4,9 @@ mod google;
 mod pdf;
 
 use cli::Args;
-use dotenv::dotenv;
 use epub::{edit_epub, read_epub, write_epub};
 use google::translate_text;
 use pdf::{edit_pdf, read_pdf, write_pdf};
-use serde_json::Value;
 
 use std::{
     env,
@@ -17,7 +15,9 @@ use std::{
 };
 
 use clap::Parser;
+use dotenv::dotenv;
 use eyre::{eyre, Result};
+use serde_json::Value;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 

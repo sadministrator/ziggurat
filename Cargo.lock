@@ -2077,6 +2077,7 @@ dependencies = [
  "epub-builder",
  "eyre",
  "lopdf",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
