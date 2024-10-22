@@ -1,17 +1,12 @@
-use std::{collections::HashMap, future::Future};
+use std::{future::Future, vec};
 
 use eyre::Result;
 use lopdf::{
     content::{Content, Operation},
-    dictionary, Document, Object, Stream,
+    dictionary,
+    xobject::PdfImage,
+    Document, Object, Stream,
 };
-
-#[derive(Debug)]
-struct ImageData {
-    content: Vec<u8>,
-    width: u32,
-    height: u32,
-}
 
 pub fn read_pdf(path: &str) -> Result<Document> {
     tracing::info!("Reading {path}...");
@@ -40,38 +35,52 @@ where
         "BaseFont" => "Courier",
     });
 
-    let images = extract_images(&doc)?;
-    let mut image_resources = dictionary! {};
-    for (name, image_data) in images {
-        let image_stream = Stream::new(
-            dictionary! {
-                "Type" => "XObject",
-                "Subtype" => "Image",
-                "Width" => image_data.width,
-                "Height" => image_data.height,
-                "ColorSpace" => "DeviceRGB",
-                "BitsPerComponent" => 8,
-            },
-            image_data.content,
-        );
-        let image_id = edited_doc.add_object(image_stream);
-
-        image_resources.set(name, image_id);
-    }
-
-    let resources_id = edited_doc.add_object(dictionary! {
-        "Font" => dictionary! {
-            "F1" => font_id,
-        },
-        "XObject" => image_resources,
-    });
-
     let mut page_ids: Vec<Object> = vec![];
-    for (page_num, _) in doc.get_pages() {
-        let page_text = doc.extract_text(&[page_num])?;
-        let edited_text = edit_func(&page_text).await?;
+    let mut image_resources = dictionary! {};
+
+    for (page_num, page_id) in doc.get_pages() {
+        let text = doc.extract_text(&[page_num])?;
+        let edited_text = edit_func(&text).await?;
+        let images = doc.get_page_images(page_id).unwrap_or_default();
+
+        for image in &images {
+            let image_stream = {
+                let mut dict = dictionary! {
+                    "Type" => "XObject",
+                    "Subtype" => "Image",
+                    "Width" => image.width,
+                    "Height" => image.height,
+                    "ColorSpace" => image.color_space.clone().unwrap_or("DeviceRGB".to_owned()),
+                    "BitsPerComponent" => image.bits_per_component.unwrap_or(8),
+                };
+
+                if let Some(filters) = &image.filters {
+                    if !filters.is_empty() {
+                        if filters.len() == 1 {
+                            dict.set("Filter", Object::Name(filters[0].clone().into_bytes()));
+                        } else {
+                            dict.set(
+                                "Filter",
+                                Object::Array(
+                                    filters
+                                        .iter()
+                                        .map(|f| Object::Name(f.clone().into_bytes()))
+                                        .collect(),
+                                ),
+                            );
+                        }
+                    }
+                }
+
+                Stream::new(dict, image.content.to_vec())
+            };
+            let image_id = edited_doc.add_object(image_stream);
+
+            image_resources.set(format!("Im{}", image.id.0).into_bytes(), image_id);
+        }
+
         let content = Content {
-            operations: format_text(&edited_text),
+            operations: format_content(&edited_text, &images),
         };
         let content_id = edited_doc.add_object(Stream::new(dictionary! {}, content.encode()?));
         let page_id = edited_doc.add_object(dictionary! {
@@ -82,6 +91,13 @@ where
 
         page_ids.push(page_id.into());
     }
+
+    let resources_id = edited_doc.add_object(dictionary! {
+        "Font" => dictionary! {
+            "F1" => font_id,
+        },
+        "XObject" => image_resources,
+    });
     let page_count = page_ids.len() as u32;
     let pages = dictionary! {
         "Type" => "Pages",
@@ -106,41 +122,7 @@ where
     Ok(edited_doc)
 }
 
-fn extract_images(doc: &Document) -> Result<HashMap<String, ImageData>> {
-    let mut images = HashMap::new();
-
-    for (id, object) in doc.objects.iter() {
-        if let Object::Stream(ref stream) = object {
-            if let Ok(subtype) = stream.dict.get(b"Subtype") {
-                if let Ok(subtype_name) = subtype.as_name() {
-                    if subtype_name == b"Image" {
-                        let content = stream.content.clone();
-                        let width = stream.dict.get(b"Width")?.as_i64()? as u32;
-                        let height = stream.dict.get(b"Height")?.as_i64()? as u32;
-                        let name = stream
-                            .dict
-                            .get(b"Name")
-                            .and_then(|n| n.as_name())
-                            .map(|n| String::from_utf8_lossy(n).into_owned())
-                            .unwrap_or_else(|_| format!("image_{}_{}", id.0, id.1));
-
-                        images.insert(
-                            name,
-                            ImageData {
-                                content,
-                                width,
-                                height,
-                            },
-                        );
-                    }
-                }
-            }
-        }
-    }
-    Ok(images)
-}
-
-fn format_text(text: &str) -> Vec<Operation> {
+fn format_content(text: &str, images: &Vec<PdfImage>) -> Vec<Operation> {
     let mut operations = vec![
         Operation::new("BT", vec![]),
         Operation::new("Tf", vec!["F1".into(), 12.into()]), // font style
@@ -195,6 +177,45 @@ fn format_text(text: &str) -> Vec<Operation> {
     }
 
     operations.push(Operation::new("ET", vec![]));
+
+    let max_image_width = 500.0;
+    let max_image_height = 700.0;
+
+    for image in images {
+        let width_scale = max_image_width / image.width as f64;
+        let height_scale = max_image_height / image.height as f64;
+        let scale = width_scale.min(height_scale).min(1.0);
+        let scaled_width = image.width as f64 * scale;
+        let scaled_height = image.height as f64 * scale;
+
+        // check if there's enough space for the image on the current page
+        if y_position - (image.height as f64) < 50.0 {
+            operations.push(Operation::new("BT", vec![]));
+            operations.push(Operation::new("Td", vec![50.into(), 750.into()]));
+            y_position = 750.0;
+            operations.push(Operation::new("ET", vec![]));
+        }
+
+        operations.push(Operation::new("q", vec![]));
+        operations.push(Operation::new(
+            "cm",
+            vec![
+                scaled_width.into(),
+                0.into(),
+                0.into(),
+                scaled_height.into(),
+                50.into(),
+                (y_position - scaled_height as f64).into(),
+            ],
+        ));
+        operations.push(Operation::new(
+            "Do",
+            vec![Object::Name(format!("Im{}", image.id.0).into_bytes())],
+        ));
+        operations.push(Operation::new("Q", vec![]));
+
+        y_position -= (scaled_height as f64) + 10.0;
+    }
 
     operations
 }
