@@ -1,10 +1,17 @@
-use std::future::Future;
+use std::{collections::HashMap, future::Future};
 
 use eyre::Result;
 use lopdf::{
     content::{Content, Operation},
     dictionary, Document, Object, Stream,
 };
+
+#[derive(Debug)]
+struct ImageData {
+    content: Vec<u8>,
+    width: u32,
+    height: u32,
+}
 
 pub fn read_pdf(path: &str) -> Result<Document> {
     tracing::info!("Reading {path}...");
@@ -32,10 +39,31 @@ where
         "Subtype" => "Type1",
         "BaseFont" => "Courier",
     });
+
+    let images = extract_images(&doc)?;
+    let mut image_resources = dictionary! {};
+    for (name, image_data) in images {
+        let image_stream = Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Image",
+                "Width" => image_data.width,
+                "Height" => image_data.height,
+                "ColorSpace" => "DeviceRGB",
+                "BitsPerComponent" => 8,
+            },
+            image_data.content,
+        );
+        let image_id = edited_doc.add_object(image_stream);
+
+        image_resources.set(name, image_id);
+    }
+
     let resources_id = edited_doc.add_object(dictionary! {
         "Font" => dictionary! {
             "F1" => font_id,
         },
+        "XObject" => image_resources,
     });
 
     let mut page_ids: Vec<Object> = vec![];
@@ -76,6 +104,40 @@ where
     edited_doc.compress();
 
     Ok(edited_doc)
+}
+
+fn extract_images(doc: &Document) -> Result<HashMap<String, ImageData>> {
+    let mut images = HashMap::new();
+
+    for (id, object) in doc.objects.iter() {
+        if let Object::Stream(ref stream) = object {
+            if let Ok(subtype) = stream.dict.get(b"Subtype") {
+                if let Ok(subtype_name) = subtype.as_name() {
+                    if subtype_name == b"Image" {
+                        let content = stream.content.clone();
+                        let width = stream.dict.get(b"Width")?.as_i64()? as u32;
+                        let height = stream.dict.get(b"Height")?.as_i64()? as u32;
+                        let name = stream
+                            .dict
+                            .get(b"Name")
+                            .and_then(|n| n.as_name())
+                            .map(|n| String::from_utf8_lossy(n).into_owned())
+                            .unwrap_or_else(|_| format!("image_{}_{}", id.0, id.1));
+
+                        images.insert(
+                            name,
+                            ImageData {
+                                content,
+                                width,
+                                height,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Ok(images)
 }
 
 fn format_text(text: &str) -> Vec<Operation> {
