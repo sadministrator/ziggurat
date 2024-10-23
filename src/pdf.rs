@@ -7,6 +7,7 @@ use lopdf::{
     xobject::PdfImage,
     Document, Object, Stream,
 };
+use regex::Regex;
 
 pub fn read_pdf(path: &str) -> Result<Document> {
     tracing::info!("Reading {path}...");
@@ -131,49 +132,69 @@ fn format_content(text: &str, images: &Vec<PdfImage>) -> Vec<Operation> {
 
     let max_width = 500.0;
     let line_height = 14.0;
+    let paragraph_spacing = 15.0;
 
-    let words: Vec<&str> = text.split_whitespace().collect();
-    let mut current_line = String::new();
+    let paragraph_split = Regex::new(r"\n\s*\n").unwrap();
+    let paragraphs: Vec<&str> = paragraph_split.split(text).collect();
     let mut y_position = 750.0;
 
-    for word in words {
-        let test_line = if current_line.is_empty() {
-            word.to_string()
-        } else {
-            format!("{} {}", current_line, word)
-        };
+    for paragraph in paragraphs {
+        tracing::debug!("{paragraph}");
+        let words: Vec<&str> = paragraph.split_whitespace().collect();
+        let mut current_line = String::new();
 
-        if string_width(&test_line) > max_width {
-            operations.push(Operation::new(
-                "Tj",
-                vec![Object::string_literal(current_line.clone())],
-            ));
-            operations.push(Operation::new("Td", vec![0.into(), (-line_height).into()]));
+        for word in words {
+            let test_line = if current_line.is_empty() {
+                word.to_string()
+            } else {
+                format!("{} {}", current_line, word)
+            };
 
-            y_position -= line_height;
-            current_line = word.to_string();
-        } else {
-            if !current_line.is_empty() {
-                current_line.push(' ');
+            if string_width(&test_line) > max_width {
+                operations.push(Operation::new(
+                    "Tj",
+                    vec![Object::string_literal(current_line.clone())],
+                ));
+                operations.push(Operation::new("Td", vec![0.into(), (-line_height).into()]));
+
+                y_position -= line_height;
+                current_line = word.to_string();
+            } else {
+                if !current_line.is_empty() {
+                    current_line.push(' ');
+                }
+                current_line.push_str(word);
             }
-            current_line.push_str(word);
+
+            // check if we need to start a new page
+            if y_position < 50.0 {
+                operations.push(Operation::new("ET", vec![]));
+                operations.push(Operation::new("BT", vec![]));
+                operations.push(Operation::new("Td", vec![50.into(), 750.into()]));
+                y_position = 750.0;
+            }
         }
 
-        // check if we need to start a new page
+        // add any remaining text
+        if !current_line.is_empty() {
+            operations.push(Operation::new(
+                "Tj",
+                vec![Object::string_literal(current_line)],
+            ));
+        }
+
+        y_position -= paragraph_spacing;
+        operations.push(Operation::new(
+            "Td",
+            vec![0.into(), (-paragraph_spacing).into()],
+        ));
+
         if y_position < 50.0 {
             operations.push(Operation::new("ET", vec![]));
             operations.push(Operation::new("BT", vec![]));
             operations.push(Operation::new("Td", vec![50.into(), 750.into()]));
             y_position = 750.0;
         }
-    }
-
-    // add any remaining text
-    if !current_line.is_empty() {
-        operations.push(Operation::new(
-            "Tj",
-            vec![Object::string_literal(current_line)],
-        ));
     }
 
     operations.push(Operation::new("ET", vec![]));
