@@ -43,6 +43,18 @@ where
         let text = doc.extract_text(&[page_num])?;
         let edited_text = edit_func(&text).await?;
         let images = doc.get_page_images(page_id).unwrap_or_default();
+        let pages_content = format_content(&edited_text, &images);
+
+        for content in pages_content {
+            let content_id = edited_doc.add_object(Stream::new(dictionary! {}, content.encode()?));
+            let page_id = edited_doc.add_object(dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "Contents" => content_id,
+            });
+
+            page_ids.push(page_id.into());
+        }
 
         for image in &images {
             let image_stream = {
@@ -79,18 +91,6 @@ where
 
             image_resources.set(format!("Im{}", image.id.0).into_bytes(), image_id);
         }
-
-        let content = Content {
-            operations: format_content(&edited_text, &images),
-        };
-        let content_id = edited_doc.add_object(Stream::new(dictionary! {}, content.encode()?));
-        let page_id = edited_doc.add_object(dictionary! {
-            "Type" => "Page",
-            "Parent" => pages_id,
-            "Contents" => content_id,
-        });
-
-        page_ids.push(page_id.into());
     }
 
     let resources_id = edited_doc.add_object(dictionary! {
@@ -123,16 +123,13 @@ where
     Ok(edited_doc)
 }
 
-fn format_content(text: &str, images: &Vec<PdfImage>) -> Vec<Operation> {
-    let mut operations = vec![
-        Operation::new("BT", vec![]),
-        Operation::new("Tf", vec!["F1".into(), 12.into()]), // font style
-        Operation::new("Td", vec![50.into(), 750.into()]),  // cursor position
-    ];
+fn format_content(text: &str, images: &Vec<PdfImage>) -> Vec<Content> {
+    let mut pages = vec![];
+    let mut operations = new_page_operations();
 
     let max_width = 500.0;
     let line_height = 14.0;
-    let paragraph_spacing = 15.0;
+    let paragraph_spacing = 30.0;
 
     let paragraph_split = Regex::new(r"\n\s*\n").unwrap();
     let paragraphs: Vec<&str> = paragraph_split.split(text).collect();
@@ -168,9 +165,11 @@ fn format_content(text: &str, images: &Vec<PdfImage>) -> Vec<Operation> {
 
             // check if we need to start a new page
             if y_position < 50.0 {
-                operations.push(Operation::new("ET", vec![]));
-                operations.push(Operation::new("BT", vec![]));
-                operations.push(Operation::new("Td", vec![50.into(), 750.into()]));
+                pages.push(Content {
+                    operations: operations.clone(),
+                });
+                operations.clear();
+                operations.append(&mut new_page_operations());
                 y_position = 750.0;
             }
         }
@@ -238,9 +237,20 @@ fn format_content(text: &str, images: &Vec<PdfImage>) -> Vec<Operation> {
         y_position -= (scaled_height as f64) + 10.0;
     }
 
-    operations
+    operations.push(Operation::new("ET", vec![]));
+    pages.push(Content { operations });
+
+    pages
 }
 
 fn string_width(s: &str) -> f32 {
     s.len() as f32 * 7.0
+}
+
+fn new_page_operations() -> Vec<Operation> {
+    vec![
+        Operation::new("BT", vec![]),
+        Operation::new("Tf", vec!["F1".into(), 12.into()]),
+        Operation::new("Td", vec![50.into(), 750.into()]),
+    ]
 }
