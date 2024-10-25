@@ -5,7 +5,7 @@ use lopdf::{
     content::{Content, Operation},
     dictionary,
     xobject::PdfImage,
-    Document, Object, Stream,
+    Dictionary, Document, Object, ObjectId, Stream,
 };
 use regex::Regex;
 
@@ -14,6 +14,25 @@ struct PagesState {
     pages: Vec<Content>,
     y_pos: f64,
 }
+
+impl PagesState {
+    pub fn new() -> Self {
+        Self {
+            pages: vec![Content {
+                operations: new_page_operations(),
+            }],
+            y_pos: MAX_Y_POS,
+        }
+    }
+}
+
+const MAX_WIDTH: f64 = 500.0;
+const LINE_HEIGHT: f64 = 14.0;
+const PARAGRAPH_SPACING: f64 = 20.0;
+const MIN_Y_POS: f64 = 50.0;
+const MAX_Y_POS: f64 = 750.0;
+const MAX_IMAGE_WIDTH: f64 = 500.0;
+const MAX_IMAGE_HEIGHT: f64 = 700.0;
 
 pub fn read_pdf(path: &str) -> Result<Document> {
     tracing::info!("Reading {path}...");
@@ -36,74 +55,97 @@ where
 {
     let mut edited_doc = Document::with_version("1.5");
     let pages_id = edited_doc.new_object_id();
-    let font_id = edited_doc.add_object(dictionary! {
-        "Type" => "Font",
-        "Subtype" => "Type1",
-        "BaseFont" => "Courier",
-    });
+    let font_id = add_font(&mut edited_doc);
 
-    let mut page_ids = vec![];
+    let mut page_ids = Vec::new();
     let mut image_resources = dictionary! {};
-    let mut pages_state = PagesState {
-        pages: vec![Content {
-            operations: new_page_operations(),
-        }],
-        y_pos: 750.0,
-    };
+    let mut pages_state = PagesState::new();
 
     for (page_num, page_id) in doc.get_pages() {
         let text = doc.extract_text(&[page_num])?;
         let edited_text = edit_func(&text).await?;
         let images = doc.get_page_images(page_id).unwrap_or_default();
+
         format_content(&mut pages_state, &edited_text, &images);
-
-        for image in &images {
-            let image_stream = create_image_stream(image);
-            let image_id = edited_doc.add_object(image_stream);
-
-            image_resources.set(format!("Im{}", image.id.0).into_bytes(), image_id);
-        }
+        add_images_to_resources(&mut edited_doc, &mut image_resources, &images);
     }
 
+    add_pages_to_document(&mut edited_doc, &pages_state, pages_id, &mut page_ids)?;
+
+    let resources_id = add_resources(&mut edited_doc, font_id, image_resources);
+    add_pages_object(&mut edited_doc, pages_id, &page_ids, resources_id);
+    add_catalog(&mut edited_doc, pages_id);
+
+    edited_doc.compress();
+    Ok(edited_doc)
+}
+
+fn add_font(doc: &mut Document) -> ObjectId {
+    doc.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type1",
+        "BaseFont" => "Courier",
+    })
+}
+
+fn add_images_to_resources(doc: &mut Document, resources: &mut Dictionary, images: &[PdfImage]) {
+    for image in images {
+        let image_stream = create_image_stream(image);
+        let image_id = doc.add_object(image_stream);
+        resources.set(format!("Im{}", image.id.0).into_bytes(), image_id);
+    }
+}
+
+fn add_pages_to_document(
+    doc: &mut Document,
+    pages_state: &PagesState,
+    pages_id: ObjectId,
+    page_ids: &mut Vec<Object>,
+) -> Result<()> {
     for content in &pages_state.pages {
-        let content_id = edited_doc.add_object(Stream::new(dictionary! {}, content.encode()?));
-        let page_id = edited_doc.add_object(dictionary! {
+        let content_id = doc.add_object(Stream::new(dictionary! {}, content.encode()?));
+        let page_id = doc.add_object(dictionary! {
             "Type" => "Page",
             "Parent" => pages_id,
             "Contents" => content_id,
         });
-
         page_ids.push(page_id.into());
     }
 
-    let resources_id = edited_doc.add_object(dictionary! {
+    Ok(())
+}
+
+fn add_resources(doc: &mut Document, font_id: ObjectId, image_resources: Dictionary) -> ObjectId {
+    doc.add_object(dictionary! {
         "Font" => dictionary! {
             "F1" => font_id,
         },
         "XObject" => image_resources,
-    });
-    let page_count = page_ids.len() as u32;
+    })
+}
+
+fn add_pages_object(
+    doc: &mut Document,
+    pages_id: ObjectId,
+    page_ids: &[Object],
+    resources_id: ObjectId,
+) {
     let pages = dictionary! {
         "Type" => "Pages",
-        "Kids" => page_ids,
-        "Count" => page_count,
+        "Kids" => page_ids.to_vec(),
+        "Count" => page_ids.len() as u32,
         "Resources" => resources_id,
         "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
     };
+    doc.objects.insert(pages_id, Object::Dictionary(pages));
+}
 
-    edited_doc
-        .objects
-        .insert(pages_id, Object::Dictionary(pages));
-
-    let catalog_id = edited_doc.add_object(dictionary! {
+fn add_catalog(doc: &mut Document, pages_id: ObjectId) {
+    let catalog_id = doc.add_object(dictionary! {
         "Type" => "Catalog",
         "Pages" => pages_id,
     });
-
-    edited_doc.trailer.set("Root", catalog_id);
-    edited_doc.compress();
-
-    Ok(edited_doc)
+    doc.trailer.set("Root", catalog_id);
 }
 
 fn create_image_stream(image: &PdfImage) -> Stream {
@@ -138,54 +180,23 @@ fn create_image_stream(image: &PdfImage) -> Stream {
 }
 
 fn format_content(pages_state: &mut PagesState, text: &str, images: &[PdfImage]) {
-    const MAX_WIDTH: f64 = 500.0;
-    const LINE_HEIGHT: f64 = 14.0;
-    const PARAGRAPH_SPACING: f64 = 20.0;
-    const MIN_Y_POS: f64 = 50.0;
-    const MAX_Y_POS: f64 = 750.0;
-    const MAX_IMAGE_WIDTH: f64 = 500.0;
-    const MAX_IMAGE_HEIGHT: f64 = 700.0;
-
     let paragraph_split = Regex::new(r"\n\s*\n").unwrap();
     let paragraphs: Vec<&str> = paragraph_split.split(text).collect();
 
     for paragraph in paragraphs {
-        format_paragraph(
-            pages_state,
-            paragraph,
-            MAX_WIDTH,
-            LINE_HEIGHT,
-            PARAGRAPH_SPACING,
-            MIN_Y_POS,
-            MAX_Y_POS,
-        );
+        format_paragraph(pages_state, paragraph);
     }
 
     end_text_section(pages_state);
 
     for image in images {
-        add_image(
-            pages_state,
-            image,
-            MAX_IMAGE_WIDTH,
-            MAX_IMAGE_HEIGHT,
-            MIN_Y_POS,
-            MAX_Y_POS,
-        );
+        add_image(pages_state, image);
     }
 
     end_text_section(pages_state);
 }
 
-fn format_paragraph(
-    pages_state: &mut PagesState,
-    paragraph: &str,
-    max_width: f64,
-    line_height: f64,
-    paragraph_spacing: f64,
-    min_y_pos: f64,
-    max_y_pos: f64,
-) {
+fn format_paragraph(pages_state: &mut PagesState, paragraph: &str) {
     let words: Vec<&str> = paragraph.split_whitespace().collect();
     let mut current_line = String::new();
 
@@ -196,21 +207,21 @@ fn format_paragraph(
             format!("{} {}", current_line, word)
         };
 
-        if string_width(&test_line) > max_width {
-            add_line_to_page(pages_state, &current_line, line_height);
+        if string_width(&test_line) > MAX_WIDTH {
+            add_line_to_page(pages_state, &current_line, LINE_HEIGHT);
             current_line = word.to_string();
         } else {
             current_line = test_line;
         }
 
-        check_and_create_new_page(pages_state, min_y_pos, max_y_pos);
+        check_and_create_new_page(pages_state);
     }
 
     if !current_line.is_empty() {
         add_line_to_page(pages_state, &current_line, 0.0);
     }
 
-    add_paragraph_spacing(pages_state, paragraph_spacing, min_y_pos, max_y_pos);
+    add_paragraph_spacing(pages_state, PARAGRAPH_SPACING);
 }
 
 fn add_line_to_page(pages_state: &mut PagesState, line: &str, line_height: f64) {
@@ -226,21 +237,16 @@ fn add_line_to_page(pages_state: &mut PagesState, line: &str, line_height: f64) 
     }
 }
 
-fn check_and_create_new_page(pages_state: &mut PagesState, min_y_pos: f64, max_y_pos: f64) {
-    if pages_state.y_pos < min_y_pos {
+fn check_and_create_new_page(pages_state: &mut PagesState) {
+    if pages_state.y_pos < MIN_Y_POS {
         pages_state.pages.push(Content {
             operations: new_page_operations(),
         });
-        pages_state.y_pos = max_y_pos;
+        pages_state.y_pos = MAX_Y_POS;
     }
 }
 
-fn add_paragraph_spacing(
-    pages_state: &mut PagesState,
-    paragraph_spacing: f64,
-    min_y_pos: f64,
-    max_y_pos: f64,
-) {
+fn add_paragraph_spacing(pages_state: &mut PagesState, paragraph_spacing: f64) {
     if let Some(last_page) = pages_state.pages.last_mut() {
         pages_state.y_pos -= paragraph_spacing;
         last_page.operations.push(Operation::new(
@@ -248,16 +254,16 @@ fn add_paragraph_spacing(
             vec![0.into(), (-paragraph_spacing).into()],
         ));
 
-        if pages_state.y_pos < min_y_pos {
+        if pages_state.y_pos < MIN_Y_POS {
             last_page.operations.extend_from_slice(&[
                 Operation::new("ET", vec![]),
                 Operation::new("BT", vec![]),
-                Operation::new("Td", vec![50.into(), max_y_pos.into()]),
+                Operation::new("Td", vec![50.into(), MAX_Y_POS.into()]),
             ]);
             pages_state.pages.push(Content {
                 operations: new_page_operations(),
             });
-            pages_state.y_pos = max_y_pos;
+            pages_state.y_pos = MAX_Y_POS;
         }
     }
 }
@@ -268,20 +274,13 @@ fn end_text_section(pages_state: &mut PagesState) {
     }
 }
 
-fn add_image(
-    pages_state: &mut PagesState,
-    image: &PdfImage,
-    max_image_width: f64,
-    max_image_height: f64,
-    min_y_pos: f64,
-    max_y_pos: f64,
-) {
-    let scale = calculate_image_scale(image, max_image_width, max_image_height);
+fn add_image(pages_state: &mut PagesState, image: &PdfImage) {
+    let scale = calculate_image_scale(image, MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT);
     let scaled_width = image.width as f64 * scale;
     let scaled_height = image.height as f64 * scale;
 
-    if pages_state.y_pos - scaled_height < min_y_pos {
-        create_new_page_for_image(pages_state, max_y_pos);
+    if pages_state.y_pos - scaled_height < MIN_Y_POS {
+        create_new_page_for_image(pages_state, MAX_Y_POS);
     }
 
     if let Some(last_page) = pages_state.pages.last_mut() {
