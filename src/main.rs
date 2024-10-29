@@ -66,16 +66,16 @@ async fn main() -> Result<()> {
     match file_type {
         FileType::PDF => {
             let doc = read_pdf(&args.input)?;
-            let edited = edit_pdf(doc, |text| {
-                translate_text(text.to_string(), args.to.clone(), api_key.clone())
+            let edited = edit_pdf(doc, |snippets| {
+                translate_text(snippets, args.to.clone(), api_key.clone())
             })
             .await?;
             write_pdf(edited, &args.output)?;
         }
         FileType::EPUB => {
             let doc = read_epub(&args.input)?;
-            let edited = edit_epub(doc, |text| {
-                translate_text(text.to_string(), args.to.clone(), api_key.clone())
+            let edited = edit_epub(doc, |snippets| {
+                translate_text(snippets, args.to.clone(), api_key.clone())
             })
             .await?;
             write_epub(edited, &args.output)?;

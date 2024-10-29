@@ -28,8 +28,8 @@ pub async fn edit_epub<F, Fut>(
     edit_func: F,
 ) -> Result<EditedEpub>
 where
-    F: Fn(&str) -> Fut,
-    Fut: Future<Output = Result<String>>,
+    F: Fn(Vec<String>) -> Fut,
+    Fut: Future<Output = Result<Vec<String>>>,
 {
     let mut edited_content = HashMap::new();
 
@@ -57,8 +57,8 @@ where
 
 async fn edit_html<F, Fut>(html: &str, edit_func: F) -> Result<String>
 where
-    F: Fn(&str) -> Fut,
-    Fut: Future<Output = Result<String>>,
+    F: Fn(Vec<String>) -> Fut,
+    Fut: Future<Output = Result<Vec<String>>>,
 {
     let (html, special_tags) = replace_special_tags(html);
 
@@ -76,9 +76,9 @@ where
     for &index in &text_nodes {
         if let Some(Node::Raw(bytes)) = &mut parser.resolve_node_id(index as u32) {
             let text = bytes.as_utf8_str();
-            let edited_text = edit_func(&text).await?;
+            let edited_text = edit_func(vec![text.to_string()]).await?;
             let mut edited_bytes = Bytes::new();
-            edited_bytes.set(edited_text.as_bytes())?;
+            edited_bytes.set(edited_text[0].as_bytes())?;
             if let Some(node) = parser.resolve_node_id_mut(index as u32) {
                 *node = Node::Raw(edited_bytes);
             }

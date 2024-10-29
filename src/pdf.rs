@@ -1,6 +1,10 @@
-use std::{future::Future, vec};
+use std::{future::Future, sync::Arc, vec};
 
 use eyre::Result;
+use futures::{
+    stream::{self, StreamExt},
+    TryStreamExt,
+};
 use lopdf::{
     content::{Content, Operation},
     dictionary,
@@ -8,6 +12,7 @@ use lopdf::{
     Dictionary, Document, Object, ObjectId, Stream,
 };
 use regex::Regex;
+use tokio::sync::Semaphore;
 
 #[derive(Debug)]
 struct PagesState {
@@ -15,8 +20,8 @@ struct PagesState {
     y_pos: f64,
 }
 
-impl PagesState {
-    pub fn new() -> Self {
+impl Default for PagesState {
+    fn default() -> Self {
         Self {
             pages: vec![Content {
                 operations: new_page_operations(),
@@ -25,6 +30,9 @@ impl PagesState {
         }
     }
 }
+
+const BATCH_SIZE: usize = 10;
+const MAX_CONCURRENT_REQUESTS: usize = 5;
 
 const MAX_WIDTH: f64 = 500.0;
 const LINE_HEIGHT: f64 = 14.0;
@@ -50,24 +58,59 @@ pub fn write_pdf(mut doc: Document, to: &str) -> Result<()> {
 
 pub async fn edit_pdf<F, Fut>(doc: Document, edit_func: F) -> Result<Document>
 where
-    F: Fn(&str) -> Fut,
-    Fut: Future<Output = Result<String>>,
+    F: Fn(Vec<String>) -> Fut,
+    Fut: Future<Output = Result<Vec<String>>>,
 {
     let mut edited_doc = Document::with_version("1.5");
     let pages_id = edited_doc.new_object_id();
     let font_id = add_font(&mut edited_doc);
 
-    let mut page_ids = Vec::new();
+    let mut page_ids = Vec::with_capacity(doc.get_pages().len());
     let mut image_resources = dictionary! {};
-    let mut pages_state = PagesState::new();
+    let mut pages_state = PagesState::default();
 
-    for (page_num, page_id) in doc.get_pages() {
+    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
+    let edit_func = Arc::new(edit_func);
+
+    let pages: Vec<_> = doc.get_pages().into_iter().collect();
+    let mut snippet_batches = Vec::new();
+    let mut current_batch = Vec::new();
+
+    for (page_num, page_id) in pages {
         let text = doc.extract_text(&[page_num])?;
-        let edited_text = edit_func(&text).await?;
-        let images = doc.get_page_images(page_id).unwrap_or_default();
+        current_batch.push((text, page_id));
 
-        format_content(&mut pages_state, &edited_text, &images);
-        add_images_to_resources(&mut edited_doc, &mut image_resources, &images);
+        if current_batch.len() >= BATCH_SIZE {
+            snippet_batches.push(std::mem::take(&mut current_batch))
+        }
+    }
+
+    if !current_batch.is_empty() {
+        snippet_batches.push(std::mem::take(&mut current_batch));
+    }
+
+    let results: Result<Vec<(Vec<String>, Vec<ObjectId>)>> = stream::iter(snippet_batches)
+        .map(|batch| {
+            let edit_func = Arc::clone(&edit_func);
+            let semaphore = Arc::clone(&semaphore);
+            async move {
+                let _permit = semaphore.acquire().await.unwrap();
+                let (snippets, page_ids): (Vec<_>, Vec<_>) = batch.into_iter().unzip();
+                let edited_text = edit_func(snippets).await?;
+                Ok((edited_text, page_ids))
+            }
+        })
+        .buffer_unordered(MAX_CONCURRENT_REQUESTS)
+        .try_collect()
+        .await;
+    let results = results?;
+
+    for (snippets, page_ids) in results {
+        for (snippet, page_id) in snippets.into_iter().zip(page_ids) {
+            let images = doc.get_page_images(page_id).unwrap_or_default();
+            format_content(&mut pages_state, &snippet, &images);
+            add_images_to_resources(&mut edited_doc, &mut image_resources, &images);
+        }
     }
 
     add_pages_to_document(&mut edited_doc, &pages_state, pages_id, &mut page_ids)?;
@@ -338,7 +381,8 @@ fn add_image_operations(page: &mut Content, image: &PdfImage, width: f64, height
 }
 
 fn string_width(s: &str) -> f64 {
-    s.len() as f64 * 7.0
+    const CHAR_WIDTH: f64 = 7.0;
+    s.len() as f64 * CHAR_WIDTH
 }
 
 fn new_page_operations() -> Vec<Operation> {

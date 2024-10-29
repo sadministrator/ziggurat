@@ -9,6 +9,7 @@ dotenv = "0.15.0"
 epub = "2.1.2"
 epub-builder = "0.7.4"
 eyre = "0.6.12"
+futures = "0.3.31"
 lopdf = "0.34.0"
 regex = "1.11.0"
 reqwest = { version = "0.12.8", features = ["json"] }

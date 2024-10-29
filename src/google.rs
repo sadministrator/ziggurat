@@ -24,34 +24,39 @@ struct Translation {
 }
 
 pub async fn translate_text(
-    text: String,
+    snippets: Vec<String>,
     target_language: String,
     api_key: String,
-) -> Result<String> {
-    if is_whitespace(&text) {
-        Ok(text)
-    } else {
-        let client = reqwest::Client::new();
-        let url = format!(
-            "https://translation.googleapis.com/language/translate/v2?key={}",
-            api_key
-        );
+) -> Result<Vec<String>> {
+    let client = reqwest::Client::new();
+    let url = format!(
+        "https://translation.googleapis.com/language/translate/v2?key={}",
+        api_key
+    );
 
-        let request = TranslateRequest {
-            q: text.to_string(),
+    let requests: Vec<TranslateRequest> = snippets
+        .into_iter()
+        .filter(|s| !is_whitespace(s))
+        .map(|s| TranslateRequest {
+            q: s.to_string(),
             target: target_language.to_string(),
-        };
+        })
+        .collect();
 
-        let response: TranslateResponse = client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await?
-            .json()
-            .await?;
+    let response: TranslateResponse = client
+        .post(&url)
+        .json(&requests)
+        .send()
+        .await?
+        .json()
+        .await?;
 
-        Ok(response.data.translations[0].translated_text.clone())
-    }
+    Ok(response
+        .data
+        .translations
+        .into_iter()
+        .map(|t| t.translated_text)
+        .collect())
 }
 
 fn is_whitespace(snippet: &str) -> bool {
