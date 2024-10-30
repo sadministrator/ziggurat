@@ -1,11 +1,13 @@
 mod cli;
 mod epub;
 mod google;
+mod options;
 mod pdf;
 
 use cli::Args;
 use epub::{edit_epub, read_epub, write_epub};
 use google::translate_text;
+use options::{PdfOptions, RequestOptions};
 use pdf::{edit_pdf, read_pdf, write_pdf};
 
 use std::{
@@ -45,6 +47,7 @@ async fn main() -> Result<()> {
         dotenv().ok();
         env::var("ZIGGURAT_API_KEY")?
     };
+    let request_options = RequestOptions::default();
 
     let subscriber = FmtSubscriber::builder()
         .with_max_level(if args.verbose {
@@ -66,7 +69,8 @@ async fn main() -> Result<()> {
     match file_type {
         FileType::PDF => {
             let doc = read_pdf(&args.input)?;
-            let edited = edit_pdf(doc, |snippets| {
+            let pdf_options = PdfOptions::default();
+            let edited = edit_pdf(doc, request_options, pdf_options, |snippets| {
                 translate_text(snippets, args.to.clone(), api_key.clone())
             })
             .await?;

@@ -14,33 +14,24 @@ use lopdf::{
 use regex::Regex;
 use tokio::sync::Semaphore;
 
+use crate::options::{PdfOptions, RequestOptions};
+
 #[derive(Debug)]
 struct PagesState {
     pages: Vec<Content>,
     y_pos: f64,
 }
 
-impl Default for PagesState {
-    fn default() -> Self {
+impl PagesState {
+    fn new(options: &PdfOptions) -> Self {
         Self {
             pages: vec![Content {
                 operations: new_page_operations(),
             }],
-            y_pos: MAX_Y_POS,
+            y_pos: options.max_y_pos,
         }
     }
 }
-
-const BATCH_SIZE: usize = 10;
-const MAX_CONCURRENT_REQUESTS: usize = 5;
-
-const MAX_WIDTH: f64 = 500.0;
-const LINE_HEIGHT: f64 = 14.0;
-const PARAGRAPH_SPACING: f64 = 20.0;
-const MIN_Y_POS: f64 = 50.0;
-const MAX_Y_POS: f64 = 750.0;
-const MAX_IMAGE_WIDTH: f64 = 500.0;
-const MAX_IMAGE_HEIGHT: f64 = 700.0;
 
 pub fn read_pdf(path: &str) -> Result<Document> {
     tracing::info!("Reading {path}...");
@@ -56,7 +47,12 @@ pub fn write_pdf(mut doc: Document, to: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn edit_pdf<F, Fut>(doc: Document, edit_func: F) -> Result<Document>
+pub async fn edit_pdf<F, Fut>(
+    doc: Document,
+    request_options: RequestOptions,
+    pdf_options: PdfOptions,
+    edit_func: F,
+) -> Result<Document>
 where
     F: Fn(Vec<String>) -> Fut,
     Fut: Future<Output = Result<Vec<String>>>,
@@ -67,9 +63,9 @@ where
 
     let mut page_ids = Vec::with_capacity(doc.get_pages().len());
     let mut image_resources = dictionary! {};
-    let mut pages_state = PagesState::default();
+    let mut pages_state = PagesState::new(&pdf_options);
 
-    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
+    let semaphore = Arc::new(Semaphore::new(request_options.max_concurrency));
     let edit_func = Arc::new(edit_func);
 
     let pages: Vec<_> = doc.get_pages().into_iter().collect();
@@ -80,7 +76,7 @@ where
         let text = doc.extract_text(&[page_num])?;
         current_batch.push((text, page_id));
 
-        if current_batch.len() >= BATCH_SIZE {
+        if current_batch.len() >= request_options.batch_size {
             snippet_batches.push(std::mem::take(&mut current_batch))
         }
     }
@@ -100,7 +96,7 @@ where
                 Ok((edited_text, page_ids))
             }
         })
-        .buffer_unordered(MAX_CONCURRENT_REQUESTS)
+        .buffer_unordered(request_options.max_concurrency)
         .try_collect()
         .await;
     let results = results?;
@@ -108,7 +104,7 @@ where
     for (snippets, page_ids) in results {
         for (snippet, page_id) in snippets.into_iter().zip(page_ids) {
             let images = doc.get_page_images(page_id).unwrap_or_default();
-            format_content(&mut pages_state, &snippet, &images);
+            format_content(&pdf_options, &mut pages_state, &snippet, &images);
             add_images_to_resources(&mut edited_doc, &mut image_resources, &images);
         }
     }
@@ -222,24 +218,29 @@ fn create_image_stream(image: &PdfImage) -> Stream {
     Stream::new(dict, image.content.to_vec())
 }
 
-fn format_content(pages_state: &mut PagesState, text: &str, images: &[PdfImage]) {
+fn format_content(
+    options: &PdfOptions,
+    pages_state: &mut PagesState,
+    text: &str,
+    images: &[PdfImage],
+) {
     let paragraph_split = Regex::new(r"\n\s*\n").unwrap();
     let paragraphs: Vec<&str> = paragraph_split.split(text).collect();
 
     for paragraph in paragraphs {
-        format_paragraph(pages_state, paragraph);
+        format_paragraph(options, pages_state, paragraph);
     }
 
     end_text_section(pages_state);
 
     for image in images {
-        add_image(pages_state, image);
+        add_image(options, pages_state, image);
     }
 
     end_text_section(pages_state);
 }
 
-fn format_paragraph(pages_state: &mut PagesState, paragraph: &str) {
+fn format_paragraph(options: &PdfOptions, pages_state: &mut PagesState, paragraph: &str) {
     let words: Vec<&str> = paragraph.split_whitespace().collect();
     let mut current_line = String::new();
 
@@ -250,21 +251,21 @@ fn format_paragraph(pages_state: &mut PagesState, paragraph: &str) {
             format!("{} {}", current_line, word)
         };
 
-        if string_width(&test_line) > MAX_WIDTH {
-            add_line_to_page(pages_state, &current_line, LINE_HEIGHT);
+        if string_width(&test_line) > options.max_width {
+            add_line_to_page(pages_state, &current_line, options.line_height);
             current_line = word.to_string();
         } else {
             current_line = test_line;
         }
 
-        check_and_create_new_page(pages_state);
+        check_and_create_new_page(pages_state, &options);
     }
 
     if !current_line.is_empty() {
         add_line_to_page(pages_state, &current_line, 0.0);
     }
 
-    add_paragraph_spacing(pages_state, PARAGRAPH_SPACING);
+    add_paragraph_spacing(options, pages_state, options.paragraph_spacing);
 }
 
 fn add_line_to_page(pages_state: &mut PagesState, line: &str, line_height: f64) {
@@ -280,16 +281,20 @@ fn add_line_to_page(pages_state: &mut PagesState, line: &str, line_height: f64) 
     }
 }
 
-fn check_and_create_new_page(pages_state: &mut PagesState) {
-    if pages_state.y_pos < MIN_Y_POS {
+fn check_and_create_new_page(pages_state: &mut PagesState, options: &PdfOptions) {
+    if pages_state.y_pos < options.min_y_pos {
         pages_state.pages.push(Content {
             operations: new_page_operations(),
         });
-        pages_state.y_pos = MAX_Y_POS;
+        pages_state.y_pos = options.max_y_pos;
     }
 }
 
-fn add_paragraph_spacing(pages_state: &mut PagesState, paragraph_spacing: f64) {
+fn add_paragraph_spacing(
+    options: &PdfOptions,
+    pages_state: &mut PagesState,
+    paragraph_spacing: f64,
+) {
     if let Some(last_page) = pages_state.pages.last_mut() {
         pages_state.y_pos -= paragraph_spacing;
         last_page.operations.push(Operation::new(
@@ -297,16 +302,16 @@ fn add_paragraph_spacing(pages_state: &mut PagesState, paragraph_spacing: f64) {
             vec![0.into(), (-paragraph_spacing).into()],
         ));
 
-        if pages_state.y_pos < MIN_Y_POS {
+        if pages_state.y_pos < options.min_y_pos {
             last_page.operations.extend_from_slice(&[
                 Operation::new("ET", vec![]),
                 Operation::new("BT", vec![]),
-                Operation::new("Td", vec![50.into(), MAX_Y_POS.into()]),
+                Operation::new("Td", vec![50.into(), options.max_y_pos.into()]),
             ]);
             pages_state.pages.push(Content {
                 operations: new_page_operations(),
             });
-            pages_state.y_pos = MAX_Y_POS;
+            pages_state.y_pos = options.max_y_pos;
         }
     }
 }
@@ -317,13 +322,13 @@ fn end_text_section(pages_state: &mut PagesState) {
     }
 }
 
-fn add_image(pages_state: &mut PagesState, image: &PdfImage) {
-    let scale = calculate_image_scale(image, MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT);
+fn add_image(options: &PdfOptions, pages_state: &mut PagesState, image: &PdfImage) {
+    let scale = calculate_image_scale(image, options.max_image_width, options.max_image_height);
     let scaled_width = image.width as f64 * scale;
     let scaled_height = image.height as f64 * scale;
 
-    if pages_state.y_pos - scaled_height < MIN_Y_POS {
-        create_new_page_for_image(pages_state, MAX_Y_POS);
+    if pages_state.y_pos - scaled_height < options.min_y_pos {
+        create_new_page_for_image(pages_state, options.max_y_pos);
     }
 
     if let Some(last_page) = pages_state.pages.last_mut() {
