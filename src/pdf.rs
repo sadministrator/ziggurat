@@ -68,11 +68,10 @@ where
     let semaphore = Arc::new(Semaphore::new(request_options.max_concurrency));
     let edit_func = Arc::new(edit_func);
 
-    let pages: Vec<_> = doc.get_pages().into_iter().collect();
     let mut snippet_batches = Vec::new();
     let mut current_batch = Vec::new();
 
-    for (page_num, page_id) in pages {
+    for (page_num, page_id) in doc.get_pages() {
         let text = doc.extract_text(&[page_num])?;
         current_batch.push((text, page_id));
 

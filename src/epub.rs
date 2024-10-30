@@ -4,15 +4,20 @@ use std::{
     future::Future,
     io::{BufReader, BufWriter, Cursor, Write},
     path::Path,
+    sync::Arc,
 };
 
 use epub::doc::EpubDoc;
 use epub_builder::{EpubBuilder, EpubContent, ReferenceType, ZipLibrary};
 use eyre::{eyre, Result};
+use futures::{stream, StreamExt};
 use tl::{Bytes, Node, ParserOptions};
+use tokio::sync::Semaphore;
+
+use crate::options::RequestOptions;
 
 pub struct EditedEpub {
-    pub doc: EpubDoc<BufReader<File>>,
+    pub base: EpubDoc<BufReader<File>>,
     pub content: HashMap<String, String>,
 }
 
@@ -25,6 +30,7 @@ pub fn read_epub(path: &str) -> Result<EpubDoc<BufReader<File>>> {
 
 pub async fn edit_epub<F, Fut>(
     mut doc: EpubDoc<BufReader<File>>,
+    request_options: RequestOptions,
     edit_func: F,
 ) -> Result<EditedEpub>
 where
@@ -36,7 +42,7 @@ where
     for _ in 0..doc.get_num_pages() {
         if let Some((content, mime)) = doc.get_current_str() {
             if mime == "application/xhtml+xml" {
-                let edited_html = edit_html(&content, &edit_func).await?;
+                let edited_html = edit_html(&request_options, &content, &edit_func).await?;
                 let current_id = doc
                     .get_current_id()
                     .ok_or(eyre!("Unable to get current id"))?;
@@ -50,12 +56,16 @@ where
     doc.set_current_page(0);
 
     Ok(EditedEpub {
-        doc,
+        base: doc,
         content: edited_content,
     })
 }
 
-async fn edit_html<F, Fut>(html: &str, edit_func: F) -> Result<String>
+async fn edit_html<F, Fut>(
+    request_options: &RequestOptions,
+    html: &str,
+    edit_func: F,
+) -> Result<String>
 where
     F: Fn(Vec<String>) -> Fut,
     Fut: Future<Output = Result<Vec<String>>>,
@@ -71,15 +81,39 @@ where
         }
     }
 
-    let parser = dom.parser_mut();
+    let parser = Arc::new(dom.parser());
+    let edit_func: Arc<F> = Arc::new(edit_func);
+    let semaphore = Arc::new(Semaphore::new(request_options.max_concurrency));
 
-    for &index in &text_nodes {
-        if let Some(Node::Raw(bytes)) = &mut parser.resolve_node_id(index as u32) {
-            let text = bytes.as_utf8_str();
-            let edited_text = edit_func(vec![text.to_string()]).await?;
-            let mut edited_bytes = Bytes::new();
-            edited_bytes.set(edited_text[0].as_bytes())?;
+    let chunks = text_nodes.chunks(request_options.batch_size);
+    let results: Vec<Result<(&[usize], Vec<std::string::String>)>> = stream::iter(chunks)
+        .map(|chunk| {
+            let edit_func = Arc::clone(&edit_func);
+            let semaphore = Arc::clone(&semaphore);
+            let parser = Arc::clone(&parser);
+            async move {
+                let _permit = semaphore.acquire().await.unwrap();
+                let mut snippets = Vec::with_capacity(chunk.len());
+                for &index in chunk {
+                    if let Some(Node::Raw(bytes)) = parser.resolve_node_id(index as u32) {
+                        snippets.push(bytes.as_utf8_str().to_string());
+                    }
+                }
+                let edited_snippets = edit_func(snippets).await?;
+                Ok((chunk, edited_snippets))
+            }
+        })
+        .buffer_unordered(request_options.max_concurrency)
+        .collect()
+        .await;
+
+    let parser = dom.parser_mut();
+    for result in results {
+        let (chunk, edited_snippets) = result?;
+        for (&index, edited_snippet) in chunk.iter().zip(edited_snippets.iter()) {
             if let Some(node) = parser.resolve_node_id_mut(index as u32) {
+                let mut edited_bytes = Bytes::new();
+                edited_bytes.set(edited_snippet.as_bytes())?;
                 *node = Node::Raw(edited_bytes);
             }
         }
@@ -97,7 +131,6 @@ fn replace_special_tags(html: &str) -> (String, Vec<(String, String)>) {
     let re = regex::Regex::new(r"<.*pagebreak.*>").unwrap();
 
     for cap in re.captures_iter(html) {
-        tracing::error!("{}", &cap[0]);
         let tag = cap[0].to_string();
         let placeholder = format!("SPECIAL_TAG_{}", special_tags.len());
         special_tags.push((placeholder.clone(), tag.clone()));
@@ -121,7 +154,7 @@ pub fn write_epub(mut edited: EditedEpub, to: &str) -> Result<()> {
     add_metadata(&mut builder, &edited)?;
     add_resources(&mut builder, &mut edited)?;
     add_cover_image(&mut builder, &mut edited)?;
-    add_content_with_chapters(&mut builder, &mut edited.doc, &edited.content)?;
+    add_content_with_chapters(&mut builder, &mut edited.base, &edited.content)?;
 
     let output = File::create(to)?;
     let mut buf_writer = BufWriter::new(output);
@@ -135,7 +168,7 @@ fn add_metadata(builder: &mut EpubBuilder<ZipLibrary>, edited: &EditedEpub) -> R
     let epub_builder_fields = ["title", "contributor", "description", "subject"];
 
     for field in epub_builder_fields {
-        if let Some(values) = edited.doc.metadata.get(field) {
+        if let Some(values) = edited.base.metadata.get(field) {
             for value in values {
                 builder.metadata(field, value)?;
             }
@@ -145,8 +178,8 @@ fn add_metadata(builder: &mut EpubBuilder<ZipLibrary>, edited: &EditedEpub) -> R
 }
 
 fn add_resources(builder: &mut EpubBuilder<ZipLibrary>, edited: &mut EditedEpub) -> Result<()> {
-    for (id, (path, mime)) in edited.doc.resources.clone().iter() {
-        if let Some((data, _)) = edited.doc.get_resource(&id) {
+    for (id, (path, mime)) in edited.base.resources.clone().iter() {
+        if let Some((data, _)) = edited.base.get_resource(&id) {
             builder.add_resource(
                 path.to_str()
                     .ok_or_else(|| eyre!("Invalid path for resource: {}", id))?,
@@ -161,7 +194,7 @@ fn add_resources(builder: &mut EpubBuilder<ZipLibrary>, edited: &mut EditedEpub)
 }
 
 fn add_cover_image(builder: &mut EpubBuilder<ZipLibrary>, edited: &mut EditedEpub) -> Result<()> {
-    if let Some((cover_data, mime)) = edited.doc.get_cover() {
+    if let Some((cover_data, mime)) = edited.base.get_cover() {
         builder.add_cover_image("cover_image", Cursor::new(cover_data), mime)?;
     }
     Ok(())
