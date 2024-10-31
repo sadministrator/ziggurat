@@ -2121,6 +2121,7 @@ checksum = "ced3678a2879b30306d323f4542626697a464a97c0a07c9aebf7ebca65cd4dde"
 name = "ziggurat"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "clap",
  "dotenv",
  "epub",

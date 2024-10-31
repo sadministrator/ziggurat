@@ -1,5 +1,9 @@
-use eyre::Result;
+use std::{fs::File, io::Read};
+
+use base64::{prelude::BASE64_STANDARD, Engine};
+use eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 #[derive(Serialize)]
 struct TranslateRequest {
@@ -23,10 +27,58 @@ struct Translation {
     translated_text: String,
 }
 
+async fn translate_pdf(
+    pdf_path: &str,
+    target_language: &str,
+    project_id: &str,
+    api_key: &str,
+) -> Result<Vec<u8>> {
+    let mut file = File::open(pdf_path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+
+    let base64_content = BASE64_STANDARD.encode(&buffer);
+
+    let body = json!({
+        "documentInputConfig": {
+            "content": base64_content,
+            "mimeType": "application/pdf"
+        },
+        "targetLanguageCode": target_language,
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&format!(
+            "https://translation.googleapis.com/v3/projects/{}/locations/global:translateDocument",
+            project_id
+        ))
+        .bearer_auth(api_key)
+        .json(&body)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        return Err(eyre!(format!(
+            "API request failed: {:?}",
+            response.text().await?
+        )));
+    }
+
+    let response_body: serde_json::Value = response.json().await?;
+    let translated_content = response_body["documentOutputConfig"]["pdfOutputConfig"]["pdfData"]
+        .as_str()
+        .ok_or(eyre!("Failed to get translated content"))?;
+
+    let decoded_content = BASE64_STANDARD.decode(translated_content)?;
+
+    Ok(decoded_content)
+}
+
 pub async fn translate_text(
     snippets: Vec<String>,
-    target_language: String,
-    api_key: String,
+    target_language: &str,
+    api_key: &str,
 ) -> Result<Vec<String>> {
     let client = reqwest::Client::new();
     let url = format!(
