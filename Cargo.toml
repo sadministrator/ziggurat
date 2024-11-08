@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 base64 = "0.22.1"
-callm = "0.2.0"
 clap = { version = "4.5.20", features = ["derive"] }
+crossterm = "0.28.1"
 dotenv = "0.15.0"
 epub = "2.1.2"
 epub-builder = "0.7.4"
