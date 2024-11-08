@@ -270,12 +270,12 @@ fn format_paragraph(options: &PdfOptions, pages_state: &mut PagesState, paragrap
 fn add_line_to_page(pages_state: &mut PagesState, line: &str, line_height: f64) {
     if let Some(last_page) = pages_state.pages.last_mut() {
         last_page.operations.push(Operation::new(
-            "Tj",
+            "Tj", // show text
             vec![Object::string_literal(line.to_string())],
         ));
         last_page
             .operations
-            .push(Operation::new("Td", vec![0.into(), (-line_height).into()]));
+            .push(Operation::new("Td", vec![0.into(), (-line_height).into()])); // set text position
         pages_state.y_pos -= line_height;
     }
 }
@@ -302,15 +302,7 @@ fn add_paragraph_spacing(
         ));
 
         if pages_state.y_pos < options.min_y_pos {
-            last_page.operations.extend_from_slice(&[
-                Operation::new("ET", vec![]),
-                Operation::new("BT", vec![]),
-                Operation::new("Td", vec![50.into(), options.max_y_pos.into()]),
-            ]);
-            pages_state.pages.push(Content {
-                operations: new_page_operations(),
-            });
-            pages_state.y_pos = options.max_y_pos;
+            create_new_page(pages_state, options.max_y_pos);
         }
     }
 }
@@ -327,7 +319,7 @@ fn add_image(options: &PdfOptions, pages_state: &mut PagesState, image: &PdfImag
     let scaled_height = image.height as f64 * scale;
 
     if pages_state.y_pos - scaled_height < options.min_y_pos {
-        create_new_page_for_image(pages_state, options.max_y_pos);
+        create_new_page(pages_state, options.max_y_pos);
     }
 
     if let Some(last_page) = pages_state.pages.last_mut() {
@@ -348,24 +340,24 @@ fn calculate_image_scale(image: &PdfImage, max_width: f64, max_height: f64) -> f
     width_scale.min(height_scale).min(1.0)
 }
 
-fn create_new_page_for_image(pages_state: &mut PagesState, max_y_pos: f64) {
+fn create_new_page(pages_state: &mut PagesState, max_y_pos: f64) {
+    if let Some(last_page) = pages_state.pages.last_mut() {
+        last_page.operations.extend_from_slice(&[
+            Operation::new("ET", vec![]), // end text
+        ]);
+    }
+
     pages_state.pages.push(Content {
         operations: new_page_operations(),
     });
     pages_state.y_pos = max_y_pos;
-    if let Some(last_page) = pages_state.pages.last_mut() {
-        last_page.operations.extend_from_slice(&[
-            Operation::new("BT", vec![]),
-            Operation::new("Td", vec![50.into(), max_y_pos.into()]),
-            Operation::new("ET", vec![]),
-        ]);
-    }
 }
 
 fn add_image_operations(page: &mut Content, image: &PdfImage, width: f64, height: f64, y_pos: f64) {
     page.operations.extend_from_slice(&[
-        Operation::new("q", vec![]),
+        Operation::new("q", vec![]), // save the current graphics state
         Operation::new(
+            // apply a transformation matrix to current graphics state
             "cm",
             vec![
                 width.into(),
@@ -377,22 +369,24 @@ fn add_image_operations(page: &mut Content, image: &PdfImage, width: f64, height
             ],
         ),
         Operation::new(
+            // draw XObject
             "Do",
             vec![Object::Name(format!("Im{}", image.id.0).into_bytes())],
         ),
-        Operation::new("Q", vec![]),
+        Operation::new("Q", vec![]), // restore previosly saved graphics state
     ]);
 }
 
 fn string_width(s: &str) -> f64 {
+    // todo: calculate width using font info
     const CHAR_WIDTH: f64 = 7.0;
     s.len() as f64 * CHAR_WIDTH
 }
 
 fn new_page_operations() -> Vec<Operation> {
     vec![
-        Operation::new("BT", vec![]),
-        Operation::new("Tf", vec!["F1".into(), 12.into()]),
-        Operation::new("Td", vec![50.into(), 750.into()]),
+        Operation::new("BT", vec![]),                       // begin text
+        Operation::new("Tf", vec!["F1".into(), 12.into()]), // set text font
+        Operation::new("Td", vec![50.into(), 750.into()]),  // set text position
     ]
 }
