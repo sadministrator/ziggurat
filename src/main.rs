@@ -1,22 +1,32 @@
 mod cli;
 mod epub;
 mod google;
+mod llm;
 mod options;
 mod pdf;
+mod tui;
 
 use cli::Args;
 use epub::{edit_epub, read_epub, write_epub};
 use google::translate_text;
 use options::{PdfOptions, RequestOptions};
 use pdf::{edit_pdf, read_pdf, write_pdf};
+use tui::{render_app_state, AppState};
 
 use std::{
     env,
     fs::{self, File},
-    io::{Read, Seek, SeekFrom},
+    io::{stdout, Read, Seek, SeekFrom},
+    sync::{Arc, Mutex},
 };
 
+use ::tui::{backend::CrosstermBackend, Terminal};
 use clap::Parser;
+use crossterm::{
+    event::{self, Event, KeyCode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
 use dotenv::dotenv;
 use eyre::{eyre, Result};
 use serde_json::Value;
@@ -32,6 +42,31 @@ enum FileType {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    enable_raw_mode()?;
+
+    let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+
+    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+
+    let mut app_state = Arc::new(Mutex::new(AppState::new()));
+
+    loop {
+        render_app_state(&mut terminal, app_state.clone())?;
+
+        if let Event::Key(key) = event::read()? {
+            if key.code == KeyCode::Char('q') {
+                break;
+            } else {
+                tui::handle_event(key, app_state.clone())?;
+            }
+        }
+
+        terminal.flush()?;
+    }
+
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+
     let args = Args::parse();
     let api_key = if let Some(key) = args.api_key {
         key
@@ -71,15 +106,17 @@ async fn main() -> Result<()> {
             let doc = read_pdf(&args.input)?;
             let pdf_options = PdfOptions::default();
             let edited = edit_pdf(doc, request_options, pdf_options, |snippets| {
-                translate_text(snippets, args.to.clone(), api_key.clone())
+                // translate_text(snippets, args.to.clone(), api_key.clone())
+                std::future::ready(Ok(snippets))
             })
             .await?;
             write_pdf(edited, &args.output)?;
         }
         FileType::EPUB => {
             let doc = read_epub(&args.input)?;
-            let edited = edit_epub(doc, |snippets| {
-                translate_text(snippets, args.to.clone(), api_key.clone())
+            let edited = edit_epub(doc, request_options, |snippets| {
+                // translate_text(snippets, args.to.clone(), api_key.clone())
+                std::future::ready(Ok(snippets))
             })
             .await?;
             write_epub(edited, &args.output)?;

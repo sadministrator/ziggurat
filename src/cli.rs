@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-enum Provider {
+pub enum Provider {
     GoogleTranslate {
         version: ApiVersion,
         credentials: String,
@@ -14,7 +14,7 @@ enum Provider {
 }
 
 // Google Cloud Translate API version
-enum ApiVersion {
+pub enum ApiVersion {
     V2,
     V3 { project_id: String },
 }
