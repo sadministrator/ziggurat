@@ -1,17 +1,18 @@
-mod cli;
-mod epub;
-mod google;
-mod llm;
+mod filetypes;
+mod frontend;
 mod options;
-mod pdf;
-mod tui;
+mod providers;
 
-use cli::Args;
-use epub::{edit_epub, read_epub, write_epub};
-use google::translate_text;
+use filetypes::{
+    epub::{edit_epub, read_epub, write_epub},
+    pdf::{edit_pdf, read_pdf, write_pdf},
+};
+use frontend::{
+    cli::Args,
+    tui::{handle_event, render_app_state, AppState},
+};
 use options::{PdfOptions, RequestOptions};
-use pdf::{edit_pdf, read_pdf, write_pdf};
-use tui::{render_app_state, AppState};
+use providers::{google::translate_text, llm::translate};
 
 use std::{
     env,
@@ -57,7 +58,7 @@ async fn main() -> Result<()> {
             if key.code == KeyCode::Char('q') {
                 break;
             } else {
-                tui::handle_event(key, app_state.clone())?;
+                handle_event(key, app_state.clone())?;
             }
         }
 

@@ -11,7 +11,7 @@ use tui::{
     Terminal,
 };
 
-use crate::cli::{self, Provider};
+use super::cli::{self, Provider::Llm};
 
 enum Screens {
     ChooseProvider,
@@ -119,7 +119,7 @@ pub fn handle_event(key: event::KeyEvent, app_state: Arc<Mutex<AppState>>) -> Re
             code: KeyCode::Char('l'),
             ..
         } => {
-            app_state.lock().unwrap().provider = Provider::Llm {
+            app_state.lock().unwrap().provider = Llm {
                 endpoint: String::new(),
                 api_key: String::new(),
             };
