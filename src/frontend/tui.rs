@@ -13,14 +13,32 @@ use tui::{
 
 use super::cli::{self, Provider::Llm};
 
-enum Screens {
+enum Menu {
     ChooseProvider,
     GoogleInfo,
     LlmInfo,
 }
 
+impl Menu {
+    fn next(&self) -> Self {
+        match self {
+            Menu::ChooseProvider => Menu::GoogleInfo,
+            Menu::GoogleInfo => Menu::LlmInfo,
+            Menu::LlmInfo => Menu::ChooseProvider,
+        }
+    }
+
+    fn previous(&self) -> Self {
+        match self {
+            Menu::ChooseProvider => Menu::LlmInfo,
+            Menu::GoogleInfo => Menu::ChooseProvider,
+            Menu::LlmInfo => Menu::GoogleInfo,
+        }
+    }
+}
+
 pub struct AppState {
-    current_screen: Screens,
+    current_screen: Menu,
     provider: cli::Provider,
     config_path: Option<PathBuf>,
     input_file: String,
@@ -31,7 +49,7 @@ pub struct AppState {
 impl AppState {
     pub fn new() -> Self {
         Self {
-            current_screen: Screens::ChooseProvider,
+            current_screen: Menu::ChooseProvider,
             provider: cli::Provider::GoogleTranslate {
                 version: cli::ApiVersion::V2,
                 credentials: String::new(),
@@ -113,57 +131,29 @@ pub fn handle_event(key: event::KeyEvent, app_state: Arc<Mutex<AppState>>) -> Re
         KeyEvent {
             code: KeyCode::Up, ..
         } => {
-            app_state.lock().unwrap().current_screen = todo!();
+            let selected = &app_state.lock().unwrap().current_screen;
+            app_state.lock().unwrap().current_screen = selected.previous();
         }
         KeyEvent {
-            code: KeyCode::Char('l'),
+            code: KeyCode::Down,
             ..
         } => {
-            app_state.lock().unwrap().provider = Llm {
-                endpoint: String::new(),
-                api_key: String::new(),
+            let selected = &app_state.lock().unwrap().current_screen;
+            app_state.lock().unwrap().current_screen = selected.next();
+        }
+        KeyEvent {
+            code: KeyCode::Enter,
+            ..
+        } => {
+            let mut buffer = String::new();
+            io::stdin().read_line(&mut buffer)?;
+
+            match app_state.lock().unwrap().current_screen {
+                Menu::ChooseProvider => todo!(),
+                Menu::GoogleInfo => todo!(),
+                Menu::LlmInfo => todo!(),
             };
         }
-        KeyEvent {
-            code: KeyCode::Char('c'),
-            ..
-        } => {
-            let mut config_path = String::new();
-            io::stdin().read_line(&mut config_path)?;
-
-            app_state.lock().unwrap().config_path = Some(PathBuf::from(config_path.trim()));
-        }
-        KeyEvent {
-            code: KeyCode::Char('i'),
-            ..
-        } => {
-            let mut input_file = String::new();
-            io::stdin().read_line(&mut input_file)?;
-
-            app_state.lock().unwrap().input_file = input_file.trim().to_string();
-        }
-        KeyEvent {
-            code: KeyCode::Char('o'),
-            ..
-        } => {
-            let mut output_file = String::new();
-            io::stdin().read_line(&mut output_file)?;
-
-            app_state.lock().unwrap().output_file = output_file.trim().to_string();
-        }
-        KeyEvent {
-            code: KeyCode::Char('a'),
-            ..
-        } => {
-            let mut language_code = String::new();
-            io::stdin().read_line(&mut language_code)?;
-
-            app_state.lock().unwrap().language_code = language_code.trim().to_string();
-        }
-        KeyEvent {
-            code: KeyCode::Char('q'),
-            ..
-        } => {}
         _ => {}
     }
 
