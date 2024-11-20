@@ -24,7 +24,7 @@ use std::{
 use ::tui::{backend::CrosstermBackend, Terminal};
 use clap::Parser;
 use crossterm::{
-    event::{self, Event, KeyCode},
+    event::{self, Event},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -55,11 +55,7 @@ async fn main() -> Result<()> {
         render_app_state(&mut terminal, app_state.clone())?;
 
         if let Event::Key(key) = event::read()? {
-            if key.code == KeyCode::Char('q') {
-                break;
-            } else {
-                handle_event(key, app_state.clone())?;
-            }
+            handle_event(key, app_state.clone())?;
         }
 
         terminal.flush()?;

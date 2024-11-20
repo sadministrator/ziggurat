@@ -2,7 +2,8 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use crossterm::event::{self, KeyCode, KeyEvent};
+use crossterm::event::{self, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::terminal::disable_raw_mode;
 use eyre::Result;
 use tui::{
     backend::Backend,
@@ -74,52 +75,41 @@ where
         .constraints(
             [
                 Constraint::Percentage(20),
-                Constraint::Percentage(40),
                 Constraint::Percentage(20),
-                Constraint::Percentage(10),
-                Constraint::Percentage(10),
+                Constraint::Percentage(20),
+                Constraint::Percentage(20),
+                Constraint::Percentage(20),
             ]
             .as_ref(),
         )
-        .split(terminal.size()?);
-    let provider_list = List::new(vec![
-        ListItem::new("Google Translate"),
-        ListItem::new("LLM"),
-    ])
-    .block(Block::default().title("Providers").borders(Borders::ALL));
-
-    let config_list = List::new(vec![ListItem::new("None")])
-        .block(Block::default().title("Config Path").borders(Borders::ALL));
-
-    let input_list = List::new(vec![ListItem::new("None")])
-        .block(Block::default().title("Input File").borders(Borders::ALL));
-
-    let output_list = List::new(vec![ListItem::new("None")])
-        .block(Block::default().title("Output File").borders(Borders::ALL));
-
-    let language_list = List::new(vec![ListItem::new("None")]).block(
-        Block::default()
-            .title("Language Code")
-            .borders(Borders::ALL),
-    );
+        .split(terminal.size().unwrap());
 
     terminal.draw(|f| {
+        let provider_list = List::new(vec![
+            ListItem::new("Google Translate"),
+            ListItem::new("LLM"),
+        ])
+        .block(Block::default().title("Providers").borders(Borders::ALL));
+
+        let config_list = List::new(vec![ListItem::new("None")])
+            .block(Block::default().title("Config Path").borders(Borders::ALL));
+
+        let input_list = List::new(vec![ListItem::new("None")])
+            .block(Block::default().title("Input File").borders(Borders::ALL));
+
+        let output_list = List::new(vec![ListItem::new("None")])
+            .block(Block::default().title("Output File").borders(Borders::ALL));
+
+        let language_list = List::new(vec![ListItem::new("None")]).block(
+            Block::default()
+                .title("Language Code")
+                .borders(Borders::ALL),
+        );
+
         f.render_widget(provider_list, chunks[0]);
-    })?;
-
-    terminal.draw(|f| {
         f.render_widget(config_list, chunks[1]);
-    })?;
-
-    terminal.draw(|f| {
         f.render_widget(input_list, chunks[2]);
-    })?;
-
-    terminal.draw(|f| {
         f.render_widget(output_list, chunks[3]);
-    })?;
-
-    terminal.draw(|f| {
         f.render_widget(language_list, chunks[4]);
     })?;
 
@@ -153,6 +143,23 @@ pub fn handle_event(key: event::KeyEvent, app_state: Arc<Mutex<AppState>>) -> Re
                 Menu::GoogleInfo => todo!(),
                 Menu::LlmInfo => todo!(),
             };
+        }
+        KeyEvent {
+            code: KeyCode::Char('c'),
+            modifiers,
+            ..
+        } => {
+            if modifiers.contains(KeyModifiers::CONTROL) {
+                disable_raw_mode()?;
+                std::process::exit(0)
+            }
+        }
+        KeyEvent {
+            code: KeyCode::Char('q'),
+            ..
+        } => {
+            disable_raw_mode()?;
+            std::process::exit(0)
         }
         _ => {}
     }
