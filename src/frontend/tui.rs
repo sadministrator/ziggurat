@@ -2,9 +2,12 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use crossterm::event::{self, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::disable_raw_mode;
 use eyre::Result;
+use tui::style::{Color, Modifier, Style};
+use tui::text::Span;
+use tui::widgets::ListState;
 use tui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout},
@@ -12,35 +15,56 @@ use tui::{
     Terminal,
 };
 
-use super::cli::{self, Provider::Llm};
+use super::cli;
 
-enum Menu {
-    ChooseProvider,
-    GoogleInfo,
-    LlmInfo,
+enum MenuOption {
+    Providers,
+    Config,
+    Input,
+    Output,
+    Language,
 }
 
-impl Menu {
+enum Provider {
+    Google,
+    Llm,
+}
+
+impl MenuOption {
     fn next(&self) -> Self {
         match self {
-            Menu::ChooseProvider => Menu::GoogleInfo,
-            Menu::GoogleInfo => Menu::LlmInfo,
-            Menu::LlmInfo => Menu::ChooseProvider,
+            Self::Providers => Self::Config,
+            Self::Config => Self::Input,
+            Self::Input => Self::Output,
+            Self::Output => Self::Language,
+            Self::Language => Self::Providers,
         }
     }
 
     fn previous(&self) -> Self {
         match self {
-            Menu::ChooseProvider => Menu::LlmInfo,
-            Menu::GoogleInfo => Menu::ChooseProvider,
-            Menu::LlmInfo => Menu::GoogleInfo,
+            Self::Providers => Self::Language,
+            Self::Config => Self::Providers,
+            Self::Input => Self::Config,
+            Self::Output => Self::Input,
+            Self::Language => Self::Output,
+        }
+    }
+
+    fn index(&self) -> usize {
+        match self {
+            Self::Providers => 0,
+            Self::Config => 1,
+            Self::Input => 2,
+            Self::Output => 3,
+            Self::Language => 4,
         }
     }
 }
 
 pub struct AppState {
-    current_screen: Menu,
-    provider: cli::Provider,
+    pub selected: MenuOption,
+    provider: Option<cli::Provider>,
     config_path: Option<PathBuf>,
     input_file: String,
     output_file: String,
@@ -50,11 +74,8 @@ pub struct AppState {
 impl AppState {
     pub fn new() -> Self {
         Self {
-            current_screen: Menu::ChooseProvider,
-            provider: cli::Provider::GoogleTranslate {
-                version: cli::ApiVersion::V2,
-                credentials: String::new(),
-            },
+            selected: MenuOption::Providers,
+            provider: None,
             config_path: None,
             input_file: String::new(),
             output_file: String::new(),
@@ -84,29 +105,72 @@ where
         )
         .split(terminal.size().unwrap());
 
+    let normal_style = Style::default();
+    let highlighted_style = Style::default()
+        .bg(Color::Yellow)
+        .fg(Color::Black)
+        .add_modifier(Modifier::BOLD);
+
+    let selected = &app_state.lock().unwrap().selected;
+
     terminal.draw(|f| {
-        let provider_list = List::new(vec![
-            ListItem::new("Google Translate"),
-            ListItem::new("LLM"),
-        ])
-        .block(Block::default().title("Providers").borders(Borders::ALL));
+        let provider_items = vec![
+            ListItem::new(Span::raw("Google Translate")),
+            ListItem::new(Span::raw("LLM")),
+        ];
+        let provider_list = List::new(provider_items)
+            .block(
+                Block::default()
+                    .title(format!("Providers {}", selected.index()))
+                    .borders(Borders::ALL),
+            )
+            .highlight_style(if selected.index() == 0 {
+                highlighted_style
+            } else {
+                normal_style
+            })
+            .highlight_symbol("> ");
+
+        let mut provider_state = ListState::default();
+        provider_state.select(Some(selected.index()));
 
         let config_list = List::new(vec![ListItem::new("None")])
-            .block(Block::default().title("Config Path").borders(Borders::ALL));
+            .block(Block::default().title("Config Path").borders(Borders::ALL))
+            .style(if selected.index() == 1 {
+                highlighted_style
+            } else {
+                normal_style
+            });
 
         let input_list = List::new(vec![ListItem::new("None")])
-            .block(Block::default().title("Input File").borders(Borders::ALL));
+            .block(Block::default().title("Input Path").borders(Borders::ALL))
+            .style(if selected.index() == 1 {
+                highlighted_style
+            } else {
+                normal_style
+            });
 
         let output_list = List::new(vec![ListItem::new("None")])
-            .block(Block::default().title("Output File").borders(Borders::ALL));
+            .block(Block::default().title("Output Path").borders(Borders::ALL))
+            .style(if selected.index() == 2 {
+                highlighted_style
+            } else {
+                normal_style
+            });
 
-        let language_list = List::new(vec![ListItem::new("None")]).block(
-            Block::default()
-                .title("Language Code")
-                .borders(Borders::ALL),
-        );
+        let language_list = List::new(vec![ListItem::new("None")])
+            .block(
+                Block::default()
+                    .title("Language Code")
+                    .borders(Borders::ALL),
+            )
+            .style(if selected.index() == 3 {
+                highlighted_style
+            } else {
+                normal_style
+            });
 
-        f.render_widget(provider_list, chunks[0]);
+        f.render_stateful_widget(provider_list, chunks[0], &mut provider_state);
         f.render_widget(config_list, chunks[1]);
         f.render_widget(input_list, chunks[2]);
         f.render_widget(output_list, chunks[3]);
@@ -116,20 +180,20 @@ where
     Ok(())
 }
 
-pub fn handle_event(key: event::KeyEvent, app_state: Arc<Mutex<AppState>>) -> Result<()> {
+pub fn handle_event(key: KeyEvent, app_state: Arc<Mutex<AppState>>) -> Result<()> {
+    let mut selected = &app_state.lock().unwrap().selected;
+
     match key {
         KeyEvent {
             code: KeyCode::Up, ..
         } => {
-            let selected = &app_state.lock().unwrap().current_screen;
-            app_state.lock().unwrap().current_screen = selected.previous();
+            selected = &selected.previous();
         }
         KeyEvent {
             code: KeyCode::Down,
             ..
         } => {
-            let selected = &app_state.lock().unwrap().current_screen;
-            app_state.lock().unwrap().current_screen = selected.next();
+            selected = &selected.next();
         }
         KeyEvent {
             code: KeyCode::Enter,
@@ -138,10 +202,12 @@ pub fn handle_event(key: event::KeyEvent, app_state: Arc<Mutex<AppState>>) -> Re
             let mut buffer = String::new();
             io::stdin().read_line(&mut buffer)?;
 
-            match app_state.lock().unwrap().current_screen {
-                Menu::ChooseProvider => todo!(),
-                Menu::GoogleInfo => todo!(),
-                Menu::LlmInfo => todo!(),
+            match selected {
+                MenuOption::Providers => todo!(),
+                MenuOption::Config => todo!(),
+                MenuOption::Input => todo!(),
+                MenuOption::Output => todo!(),
+                MenuOption::Language => todo!(),
             };
         }
         KeyEvent {
