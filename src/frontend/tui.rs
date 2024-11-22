@@ -108,10 +108,10 @@ where
     let normal_style = Style::default();
     let highlighted_style = Style::default()
         .bg(Color::Yellow)
-        .fg(Color::Black)
+        .fg(Color::White)
         .add_modifier(Modifier::BOLD);
 
-    let selected = &app_state.lock().unwrap().selected;
+    let state = &app_state.lock().unwrap();
 
     terminal.draw(|f| {
         let provider_items = vec![
@@ -119,12 +119,8 @@ where
             ListItem::new(Span::raw("LLM")),
         ];
         let provider_list = List::new(provider_items)
-            .block(
-                Block::default()
-                    .title(format!("Providers {}", selected.index()))
-                    .borders(Borders::ALL),
-            )
-            .highlight_style(if selected.index() == 0 {
+            .block(Block::default().title("Providers").borders(Borders::ALL))
+            .highlight_style(if state.selected.index() == 0 {
                 highlighted_style
             } else {
                 normal_style
@@ -132,31 +128,16 @@ where
             .highlight_symbol("> ");
 
         let mut provider_state = ListState::default();
-        provider_state.select(Some(selected.index()));
+        provider_state.select(Some(state.selected.index()));
 
-        let config_list = List::new(vec![ListItem::new("None")])
-            .block(Block::default().title("Config Path").borders(Borders::ALL))
-            .style(if selected.index() == 1 {
-                highlighted_style
-            } else {
-                normal_style
-            });
+        let config_list = List::new(vec![list_item("None", state.selected.index() == 1)])
+            .block(Block::default().title("Config Path").borders(Borders::ALL));
 
-        let input_list = List::new(vec![ListItem::new("None")])
-            .block(Block::default().title("Input Path").borders(Borders::ALL))
-            .style(if selected.index() == 1 {
-                highlighted_style
-            } else {
-                normal_style
-            });
+        let input_list = List::new(vec![list_item("None", state.selected.index() == 2)])
+            .block(Block::default().title("Input Path").borders(Borders::ALL));
 
-        let output_list = List::new(vec![ListItem::new("None")])
-            .block(Block::default().title("Output Path").borders(Borders::ALL))
-            .style(if selected.index() == 2 {
-                highlighted_style
-            } else {
-                normal_style
-            });
+        let output_list = List::new(vec![list_item("None", state.selected.index() == 3)])
+            .block(Block::default().title("Output Path").borders(Borders::ALL));
 
         let language_list = List::new(vec![ListItem::new("None")])
             .block(
@@ -164,7 +145,7 @@ where
                     .title("Language Code")
                     .borders(Borders::ALL),
             )
-            .style(if selected.index() == 3 {
+            .style(if state.selected.index() == 4 {
                 highlighted_style
             } else {
                 normal_style
@@ -181,19 +162,19 @@ where
 }
 
 pub fn handle_event(key: KeyEvent, app_state: Arc<Mutex<AppState>>) -> Result<()> {
-    let mut selected = &app_state.lock().unwrap().selected;
+    let mut state = app_state.lock().unwrap();
 
     match key {
         KeyEvent {
             code: KeyCode::Up, ..
         } => {
-            selected = &selected.previous();
+            state.selected = state.selected.previous();
         }
         KeyEvent {
             code: KeyCode::Down,
             ..
         } => {
-            selected = &selected.next();
+            state.selected = state.selected.next();
         }
         KeyEvent {
             code: KeyCode::Enter,
@@ -202,7 +183,7 @@ pub fn handle_event(key: KeyEvent, app_state: Arc<Mutex<AppState>>) -> Result<()
             let mut buffer = String::new();
             io::stdin().read_line(&mut buffer)?;
 
-            match selected {
+            match state.selected {
                 MenuOption::Providers => todo!(),
                 MenuOption::Config => todo!(),
                 MenuOption::Input => todo!(),
@@ -231,4 +212,17 @@ pub fn handle_event(key: KeyEvent, app_state: Arc<Mutex<AppState>>) -> Result<()
     }
 
     Ok(())
+}
+
+fn list_item(content: &str, is_selected: bool) -> ListItem {
+    let style = if is_selected {
+        Style::default()
+            .bg(Color::Yellow)
+            .fg(Color::Black)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+
+    ListItem::new(Span::styled(content, style))
 }
